@@ -1,0 +1,70 @@
+package middleware
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"strings"
+
+	"github.com/termrouter/termrouter/internal/normalization"
+	"github.com/termrouter/termrouter/internal/observability"
+)
+
+// RequestID injects a request id.
+func RequestID(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if id == "" {
+			b := make([]byte, 8)
+			_, _ = rand.Read(b)
+			id = hex.EncodeToString(b)
+		}
+		w.Header().Set("X-Request-ID", id)
+		ctx := observability.WithRequestID(r.Context(), id)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// MaxBytes limits request body size.
+func MaxBytes(n int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil && n > 0 {
+				r.Body = http.MaxBytesReader(w, r.Body, n)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func writeAPIError(w http.ResponseWriter, r *http.Request, err *normalization.Error) {
+	if err == nil {
+		err = normalization.NewError(normalization.ErrInternal, "unknown error", 500)
+	}
+	// OpenAI-style vs Anthropic-style based on path
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(err.HTTPStatus)
+	if strings.HasPrefix(r.URL.Path, "/v1/messages") {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"type": "error",
+			"error": map[string]any{
+				"type":    err.Code,
+				"message": err.Message,
+			},
+		})
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error": map[string]any{
+			"message": err.Message,
+			"type":    err.Code,
+			"code":    err.Code,
+		},
+	})
+}
+
+// WriteError is exported for handlers.
+func WriteError(w http.ResponseWriter, r *http.Request, err *normalization.Error) {
+	writeAPIError(w, r, err)
+}
