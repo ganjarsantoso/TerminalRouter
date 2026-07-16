@@ -1,10 +1,1 @@
-bin/
-*.exe
-*.test
-*.out
-.DS_Store
-dist/
-*.db
-*.db-*
-.termrouter/
 prd/
