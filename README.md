@@ -9,15 +9,10 @@
 TermRouter normalizes requests, protects provider credentials, exposes stable model aliases, supports streaming and fallback, and can automatically select the most suitable configured model for each task with **Smart Routes**.
 
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-2
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-3
 [![Interface: Terminal](https://img.shields.io/badge/Interface-Terminal-24292f)](#cli-reference)
-4
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI--compatible-412991)](#api-compatibility)
-5
 [![Anthropic Compatible](https://img.shields.io/badge/API-Anthropic--compatible-D97757)](#api-compatibility)
-6
 [![Smart Routes](https://img.shields.io/badge/Routing-Task--aware-7C3AED)](#smart-routes)
 
 [Quick start](#quick-start) · [Smart Routes](#smart-routes) · [How it works](#how-termrouter-works) · [CLI](#cli-reference) · [Security](#security-model) · [Troubleshooting](#troubleshooting)
