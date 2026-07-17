@@ -22,6 +22,7 @@ import (
 	panthropic "github.com/termrouter/termrouter/internal/provider/anthropic"
 	"github.com/termrouter/termrouter/internal/provider/compatible"
 	"github.com/termrouter/termrouter/internal/router"
+	"github.com/termrouter/termrouter/internal/smart"
 	"github.com/termrouter/termrouter/internal/storage"
 )
 
@@ -64,13 +65,23 @@ func (s *Server) Handler() http.Handler {
 	if timeout == 0 {
 		timeout = 180 * time.Second
 	}
+	credCheck := func(ref string) bool {
+		if s.Creds == nil {
+			return true
+		}
+		_, err := s.Creds.Resolve(ref)
+		return err == nil
+	}
+	smartEng := smart.GatewayEngine(s.Cfg, s.Store, credCheck)
 
 	oai := &openaiapi.Gateway{
 		Resolver: resolver, Coordinator: coord, Store: s.Store, Log: s.Log,
+		Cfg: s.Cfg, Smart: smartEng,
 		AllowDirect: s.Cfg.Server.AllowDirectModel, RequestTimeout: timeout,
 	}
 	ant := &anthropic.Gateway{
 		Resolver: resolver, Coordinator: coord, Store: s.Store, Log: s.Log,
+		Cfg: s.Cfg, Smart: smartEng,
 		AllowDirect: s.Cfg.Server.AllowDirectModel, RequestTimeout: timeout,
 	}
 

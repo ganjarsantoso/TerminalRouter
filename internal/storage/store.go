@@ -61,6 +61,11 @@ func (s *Store) migrate() error {
 	if ver > currentSchemaVersion {
 		return fmt.Errorf("database schema version %d is newer than this binary (%d)", ver, currentSchemaVersion)
 	}
+	if ver < currentSchemaVersion {
+		if _, err := s.db.Exec(`UPDATE schema_version SET version = ?`, currentSchemaVersion); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -513,4 +518,221 @@ func (k ClientKey) AliasAllowed(alias string) bool {
 		}
 	}
 	return false
+}
+
+// --- Smart Routes persistence ---
+
+// SmartDecisionRecord is a stored smart routing decision (no raw prompts).
+type SmartDecisionRecord struct {
+	RequestID            string
+	RouteID              string
+	RequestedAlias       string
+	Mode                 string
+	Policy               string
+	TaskPrimaryType      string
+	TaskComplexity       string
+	Confidence           float64
+	ClassifierVersion    string
+	SelectedProvider     string
+	SelectedModel        string
+	SelectionScore       float64
+	SelectionReasons     string // JSON array
+	ShadowRecommendation string
+	UsedDefault          bool
+	DefaultReason        string
+	SessionID            string
+	SessionAffinityHit   bool
+	EvaluationsJSON      string
+	TaskJSON             string
+	CreatedAt            time.Time
+}
+
+func (s *Store) InsertSmartDecision(ctx context.Context, r SmartDecisionRecord) error {
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT OR REPLACE INTO smart_decisions(
+			request_id, route_id, requested_alias, mode, policy,
+			task_primary_type, task_complexity, confidence, classifier_version,
+			selected_provider, selected_model, selection_score, selection_reasons,
+			shadow_recommendation, used_default, default_reason, session_id,
+			session_affinity_hit, evaluations_json, task_json, created_at
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.RequestID, r.RouteID, nullStr(r.RequestedAlias), r.Mode, nullStr(r.Policy),
+		nullStr(r.TaskPrimaryType), nullStr(r.TaskComplexity), r.Confidence, nullStr(r.ClassifierVersion),
+		nullStr(r.SelectedProvider), nullStr(r.SelectedModel), r.SelectionScore, nullStr(r.SelectionReasons),
+		nullStr(r.ShadowRecommendation), boolToInt(r.UsedDefault), nullStr(r.DefaultReason), nullStr(r.SessionID),
+		boolToInt(r.SessionAffinityHit), nullStr(r.EvaluationsJSON), nullStr(r.TaskJSON),
+		r.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+func (s *Store) GetSmartDecision(ctx context.Context, requestID string) (*SmartDecisionRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT request_id, route_id, requested_alias, mode, policy,
+			task_primary_type, task_complexity, confidence, classifier_version,
+			selected_provider, selected_model, selection_score, selection_reasons,
+			shadow_recommendation, used_default, default_reason, session_id,
+			session_affinity_hit, evaluations_json, task_json, created_at
+		FROM smart_decisions WHERE request_id = ?`, requestID)
+	var r SmartDecisionRecord
+	var alias, policy, ttype, tcomp, cver, sp, sm, reasons, shadow, dreason, sid, evals, task sql.NullString
+	var usedDef, affHit int
+	var conf, score sql.NullFloat64
+	var created string
+	err := row.Scan(&r.RequestID, &r.RouteID, &alias, &r.Mode, &policy,
+		&ttype, &tcomp, &conf, &cver, &sp, &sm, &score, &reasons,
+		&shadow, &usedDef, &dreason, &sid, &affHit, &evals, &task, &created)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.RequestedAlias = alias.String
+	r.Policy = policy.String
+	r.TaskPrimaryType = ttype.String
+	r.TaskComplexity = tcomp.String
+	r.Confidence = conf.Float64
+	r.ClassifierVersion = cver.String
+	r.SelectedProvider = sp.String
+	r.SelectedModel = sm.String
+	r.SelectionScore = score.Float64
+	r.SelectionReasons = reasons.String
+	r.ShadowRecommendation = shadow.String
+	r.UsedDefault = usedDef == 1
+	r.DefaultReason = dreason.String
+	r.SessionID = sid.String
+	r.SessionAffinityHit = affHit == 1
+	r.EvaluationsJSON = evals.String
+	r.TaskJSON = task.String
+	r.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	return &r, nil
+}
+
+// SmartShadowAggregate is a simple aggregate for shadow reports.
+type SmartShadowAggregate struct {
+	Total             int
+	ByTaskType        map[string]int
+	ByRecommendation  map[string]int
+	UncertainCount    int
+	MatchActualCount  int // when shadow rec equals actual provider/model (if known)
+}
+
+func (s *Store) SmartShadowStats(ctx context.Context, routeID string, since time.Time) (*SmartShadowAggregate, error) {
+	q := `SELECT task_primary_type, shadow_recommendation, confidence, selected_provider, selected_model
+		FROM smart_decisions WHERE created_at >= ?`
+	args := []any{since.UTC().Format(time.RFC3339Nano)}
+	if routeID != "" {
+		q += ` AND route_id = ?`
+		args = append(args, routeID)
+	}
+	rows, err := s.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	agg := &SmartShadowAggregate{
+		ByTaskType:       map[string]int{},
+		ByRecommendation: map[string]int{},
+	}
+	for rows.Next() {
+		var ttype, shadow, sp, sm sql.NullString
+		var conf sql.NullFloat64
+		if err := rows.Scan(&ttype, &shadow, &conf, &sp, &sm); err != nil {
+			return nil, err
+		}
+		agg.Total++
+		tt := "unknown"
+		if ttype.Valid && ttype.String != "" {
+			tt = ttype.String
+		}
+		agg.ByTaskType[tt]++
+		rec := "none"
+		if shadow.Valid && shadow.String != "" {
+			rec = shadow.String
+		}
+		agg.ByRecommendation[rec]++
+		if conf.Valid && conf.Float64 < 0.50 {
+			agg.UncertainCount++
+		}
+		actual := ""
+		if sp.Valid && sm.Valid && sp.String != "" {
+			actual = sp.String + "/" + sm.String
+		}
+		if actual != "" && actual == rec {
+			agg.MatchActualCount++
+		}
+	}
+	return agg, rows.Err()
+}
+
+// SessionAffinityRecord pins a conversation to a target.
+type SessionAffinityRecord struct {
+	SessionID  string
+	RouteID    string
+	Provider   string
+	Model      string
+	TaskType   string
+	Complexity string
+	ExpiresAt  time.Time
+	UpdatedAt  time.Time
+}
+
+func (s *Store) GetSessionAffinity(ctx context.Context, sessionID string) (*SessionAffinityRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT session_id, route_id, provider, model, task_type, complexity, expires_at, updated_at
+		FROM smart_session_affinity WHERE session_id = ?`, sessionID)
+	var r SessionAffinityRecord
+	var ttype, comp sql.NullString
+	var exp, upd string
+	err := row.Scan(&r.SessionID, &r.RouteID, &r.Provider, &r.Model, &ttype, &comp, &exp, &upd)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.TaskType = ttype.String
+	r.Complexity = comp.String
+	r.ExpiresAt, _ = time.Parse(time.RFC3339Nano, exp)
+	r.UpdatedAt, _ = time.Parse(time.RFC3339Nano, upd)
+	if time.Now().After(r.ExpiresAt) {
+		_, _ = s.db.ExecContext(ctx, `DELETE FROM smart_session_affinity WHERE session_id = ?`, sessionID)
+		return nil, nil
+	}
+	return &r, nil
+}
+
+func (s *Store) UpsertSessionAffinity(ctx context.Context, r SessionAffinityRecord) error {
+	if r.UpdatedAt.IsZero() {
+		r.UpdatedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO smart_session_affinity(session_id, route_id, provider, model, task_type, complexity, expires_at, updated_at)
+		VALUES(?,?,?,?,?,?,?,?)
+		ON CONFLICT(session_id) DO UPDATE SET
+			route_id=excluded.route_id, provider=excluded.provider, model=excluded.model,
+			task_type=excluded.task_type, complexity=excluded.complexity,
+			expires_at=excluded.expires_at, updated_at=excluded.updated_at`,
+		r.SessionID, r.RouteID, r.Provider, r.Model, nullStr(r.TaskType), nullStr(r.Complexity),
+		r.ExpiresAt.UTC().Format(time.RFC3339Nano), r.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+func (s *Store) DeleteSessionAffinity(ctx context.Context, sessionID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM smart_session_affinity WHERE session_id = ?`, sessionID)
+	return err
+}
+
+func (s *Store) PurgeExpiredAffinity(ctx context.Context) (int64, error) {
+	res, err := s.db.ExecContext(ctx, `DELETE FROM smart_session_affinity WHERE expires_at < ?`,
+		time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }

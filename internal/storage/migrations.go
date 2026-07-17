@@ -63,6 +63,46 @@ CREATE TABLE IF NOT EXISTS model_cache (
     refreshed_at TEXT NOT NULL,
     PRIMARY KEY (provider_id, model_id)
 );
+
+CREATE TABLE IF NOT EXISTS smart_decisions (
+    request_id TEXT PRIMARY KEY,
+    route_id TEXT NOT NULL,
+    requested_alias TEXT,
+    mode TEXT NOT NULL,
+    policy TEXT,
+    task_primary_type TEXT,
+    task_complexity TEXT,
+    confidence REAL,
+    classifier_version TEXT,
+    selected_provider TEXT,
+    selected_model TEXT,
+    selection_score REAL,
+    selection_reasons TEXT,
+    shadow_recommendation TEXT,
+    used_default INTEGER NOT NULL DEFAULT 0,
+    default_reason TEXT,
+    session_id TEXT,
+    session_affinity_hit INTEGER NOT NULL DEFAULT 0,
+    evaluations_json TEXT,
+    task_json TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_smart_decisions_route ON smart_decisions(route_id);
+CREATE INDEX IF NOT EXISTS idx_smart_decisions_created ON smart_decisions(created_at);
+
+CREATE TABLE IF NOT EXISTS smart_session_affinity (
+    session_id TEXT PRIMARY KEY,
+    route_id TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    task_type TEXT,
+    complexity TEXT,
+    expires_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_smart_affinity_expires ON smart_session_affinity(expires_at);
 `
 
-const currentSchemaVersion = 1
+const currentSchemaVersion = 2

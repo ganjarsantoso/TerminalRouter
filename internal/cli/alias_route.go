@@ -123,20 +123,18 @@ func aliasRemove() *cobra.Command {
 
 func newRouteCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "route", Short: "Manage routes"}
-	cmd.AddCommand(routeAdd(), routeList(), routeShow(), routeRemove())
+	cmd.AddCommand(routeAdd(), routeList(), routeShow(), routeRemove(), routeSmartCmd())
 	return cmd
 }
 
 func routeAdd() *cobra.Command {
-	var strategy string
-	var targets []string // provider:model
+	var strategy, policy, def string
+	var targets, candidates []string // provider:model
+	var shadow bool
 	cmd := &cobra.Command{
-		Use: "add [name]", Short: "Add a route with ordered targets", Args: cobra.ExactArgs(1),
+		Use: "add [name]", Short: "Add a route with ordered targets or smart candidates", Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
-			if len(targets) == 0 {
-				return Exit(ExitInvalidConfig, fmt.Errorf("at least one --target provider:model is required"))
-			}
 			cfg, paths, store, _, err := app.LoadRuntime(mustHome())
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
@@ -146,27 +144,59 @@ func routeAdd() *cobra.Command {
 				return Exit(ExitConflict, fmt.Errorf("route %q already exists", name))
 			}
 			if strategy == "" {
-				if len(targets) > 1 {
+				if len(candidates) > 0 {
+					strategy = "smart"
+				} else if len(targets) > 1 {
 					strategy = "fallback"
 				} else {
 					strategy = "direct"
 				}
 			}
-			var ts []config.TargetConfig
-			for _, t := range targets {
-				var p, m string
-				for i := 0; i < len(t); i++ {
-					if t[i] == ':' {
-						p, m = t[:i], t[i+1:]
-						break
+
+			rc := config.RouteConfig{Strategy: strategy, Default: def}
+			if strategy == "smart" {
+				src := candidates
+				if len(src) == 0 {
+					src = targets
+				}
+				if len(src) == 0 {
+					return Exit(ExitInvalidConfig, fmt.Errorf("smart route requires --candidate provider:model"))
+				}
+				for _, t := range src {
+					p, m, err := config.ParseProviderModel(t)
+					if err != nil {
+						return Exit(ExitInvalidConfig, err)
 					}
+					rc.Candidates = append(rc.Candidates, config.CandidateConfig{Provider: p, Model: m})
 				}
-				if p == "" || m == "" {
-					return Exit(ExitInvalidConfig, fmt.Errorf("invalid target %q (use provider:model)", t))
+				mode := "live"
+				if shadow || !cmd.Flags().Changed("shadow") {
+					// PRD default: shadow until explicitly live; --shadow forces shadow; without flag use shadow
+					mode = "shadow"
 				}
-				ts = append(ts, config.TargetConfig{Provider: p, Model: m})
+				if cmd.Flags().Changed("shadow") && !shadow {
+					mode = "live"
+				}
+				if policy == "" {
+					policy = "balanced"
+				}
+				rc.Smart = &config.SmartConfig{Mode: mode, Policy: policy}
+				if def != "" {
+					rc.Smart.LowConfidenceTarget = def
+				}
+			} else {
+				if len(targets) == 0 {
+					return Exit(ExitInvalidConfig, fmt.Errorf("at least one --target provider:model is required"))
+				}
+				for _, t := range targets {
+					p, m, err := config.ParseProviderModel(t)
+					if err != nil {
+						return Exit(ExitInvalidConfig, err)
+					}
+					rc.Targets = append(rc.Targets, config.TargetConfig{Provider: p, Model: m})
+				}
 			}
-			cfg.Routes[name] = config.RouteConfig{Strategy: strategy, Targets: ts}
+			cfg.Routes[name] = rc
 			if err := cfg.Validate(); err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -176,9 +206,124 @@ func routeAdd() *cobra.Command {
 			return printOut(fmt.Sprintf("Route %q added", name), cfg.Routes[name])
 		},
 	}
-	cmd.Flags().StringVar(&strategy, "strategy", "", "direct or fallback")
+	cmd.Flags().StringVar(&strategy, "strategy", "", "direct, fallback, or smart")
 	cmd.Flags().StringArrayVar(&targets, "target", nil, "Target as provider:model (repeatable)")
+	cmd.Flags().StringArrayVar(&candidates, "candidate", nil, "Smart candidate as provider:model (repeatable)")
+	cmd.Flags().StringVar(&policy, "policy", "balanced", "Smart policy: balanced|quality|economy|fast|private")
+	cmd.Flags().StringVar(&def, "default", "", "Default provider:model for smart routes")
+	cmd.Flags().BoolVar(&shadow, "shadow", true, "Create smart route in shadow mode (default true)")
 	return cmd
+}
+
+func routeSmartCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "smart", Short: "Enable/disable smart routing modes"}
+	cmd.AddCommand(routeSmartEnable(), routeSmartDisable(), routeSmartValidate())
+	return cmd
+}
+
+func routeSmartEnable() *cobra.Command {
+	var shadow bool
+	cmd := &cobra.Command{
+		Use:   "enable [name]",
+		Short: "Enable smart mode on a route (default shadow)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, paths, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+			name := args[0]
+			r, ok := cfg.Routes[name]
+			if !ok {
+				return Exit(ExitInvalidConfig, fmt.Errorf("route %q not found", name))
+			}
+			r.Strategy = "smart"
+			if r.Smart == nil {
+				r.Smart = &config.SmartConfig{Policy: "balanced"}
+			}
+			if shadow {
+				r.Smart.Mode = "shadow"
+			} else {
+				r.Smart.Mode = "live"
+			}
+			// ensure candidates from targets if needed
+			if len(r.Candidates) == 0 && len(r.Targets) > 0 {
+				for _, t := range r.Targets {
+					r.Candidates = append(r.Candidates, config.CandidateConfig{Provider: t.Provider, Model: t.Model})
+				}
+			}
+			cfg.Routes[name] = r
+			if err := cfg.Validate(); err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			if err := config.Save(paths.Config, cfg); err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			return printOut(fmt.Sprintf("Route %q smart mode=%s", name, r.Smart.Mode), r)
+		},
+	}
+	cmd.Flags().BoolVar(&shadow, "shadow", true, "Enable in shadow mode (use --shadow=false for live)")
+	return cmd
+}
+
+func routeSmartDisable() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable [name]",
+		Short: "Disable smart selection (mode=off)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, paths, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+			name := args[0]
+			r, ok := cfg.Routes[name]
+			if !ok {
+				return Exit(ExitInvalidConfig, fmt.Errorf("route %q not found", name))
+			}
+			if r.Smart == nil {
+				r.Smart = &config.SmartConfig{}
+			}
+			r.Smart.Mode = "off"
+			cfg.Routes[name] = r
+			if err := config.Save(paths.Config, cfg); err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			return printOut(fmt.Sprintf("Route %q smart disabled", name), r)
+		},
+	}
+}
+
+func routeSmartValidate() *cobra.Command {
+	return &cobra.Command{
+		Use:   "validate [name]",
+		Short: "Validate a smart route configuration",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+			name := args[0]
+			r, ok := cfg.Routes[name]
+			if !ok {
+				return Exit(ExitInvalidConfig, fmt.Errorf("route %q not found", name))
+			}
+			if err := cfg.Validate(); err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			n := len(r.Candidates)
+			if n == 0 {
+				n = len(r.Targets)
+			}
+			return printOut(fmt.Sprintf("route %q valid (%d candidates)", name, n), map[string]any{
+				"route": name, "valid": true, "candidates": n,
+			})
+		},
+	}
 }
 
 func routeList() *cobra.Command {

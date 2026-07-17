@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/termrouter/termrouter/internal/api/middleware"
+	"github.com/termrouter/termrouter/internal/config"
 	"github.com/termrouter/termrouter/internal/execution"
 	"github.com/termrouter/termrouter/internal/normalization"
 	"github.com/termrouter/termrouter/internal/observability"
 	"github.com/termrouter/termrouter/internal/router"
+	"github.com/termrouter/termrouter/internal/smart"
 	"github.com/termrouter/termrouter/internal/storage"
 )
 
@@ -23,6 +25,8 @@ type Gateway struct {
 	Coordinator    *execution.Coordinator
 	Store          *storage.Store
 	Log            *observability.Logger
+	Cfg            *config.Config
+	Smart          *smart.Engine
 	AllowDirect    bool
 	RequestTimeout time.Duration
 }
@@ -67,6 +71,18 @@ func (g *Gateway) Messages(w http.ResponseWriter, r *http.Request) {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, g.RequestTimeout)
 		defer cancel()
+	}
+
+	if plan.Strategy == "smart" {
+		applied, aerr := smart.ApplySmart(ctx, g.Smart, g.Cfg, g.Store, plan, nreq, r)
+		if aerr != nil {
+			middleware.WriteError(w, r, normalization.NewError(normalization.ErrProviderUnavailable, aerr.Error(), 503))
+			return
+		}
+		plan = applied.Plan
+		if applied.Decision != nil {
+			smart.WriteDecisionHeaders(w, applied.Decision)
+		}
 	}
 
 	start := time.Now()

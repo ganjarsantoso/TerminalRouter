@@ -14,12 +14,13 @@ var slugRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 // Config is the human-editable TermRouter configuration (no plaintext secrets).
 type Config struct {
-	Server      ServerConfig                `yaml:"server"`
-	Credentials CredentialsConfig           `yaml:"credentials"`
-	Providers   map[string]ProviderConfig   `yaml:"providers"`
-	Routes      map[string]RouteConfig      `yaml:"routes"`
-	Aliases     map[string]AliasConfig      `yaml:"aliases"`
-	Logging     LoggingConfig               `yaml:"logging"`
+	Server        ServerConfig                `yaml:"server"`
+	Credentials   CredentialsConfig           `yaml:"credentials"`
+	Providers     map[string]ProviderConfig   `yaml:"providers"`
+	Routes        map[string]RouteConfig      `yaml:"routes"`
+	Aliases       map[string]AliasConfig      `yaml:"aliases"`
+	ModelProfiles map[string]ModelProfileConfig `yaml:"model_profiles,omitempty"`
+	Logging       LoggingConfig               `yaml:"logging"`
 }
 
 type ServerConfig struct {
@@ -55,8 +56,12 @@ func (p ProviderConfig) IsEnabled() bool {
 }
 
 type RouteConfig struct {
-	Strategy string         `yaml:"strategy"` // direct | fallback
-	Targets  []TargetConfig `yaml:"targets"`
+	Strategy   string            `yaml:"strategy"` // direct | fallback | smart
+	Targets    []TargetConfig    `yaml:"targets,omitempty"`
+	Candidates []CandidateConfig `yaml:"candidates,omitempty"` // smart routes
+	Smart      *SmartConfig      `yaml:"smart,omitempty"`
+	// Default target for smart routes (provider:model also accepted via Default string).
+	Default string `yaml:"default,omitempty"`
 }
 
 type TargetConfig struct {
@@ -64,6 +69,62 @@ type TargetConfig struct {
 	Model     string   `yaml:"model"`
 	Timeout   Duration `yaml:"timeout,omitempty"`
 	Weight    int      `yaml:"weight,omitempty"`
+}
+
+// CandidateConfig is a smart-route candidate target.
+type CandidateConfig struct {
+	Provider string `yaml:"provider"`
+	Model    string `yaml:"model"`
+	Profile  string `yaml:"profile,omitempty"`
+}
+
+// SmartConfig configures task-aware selection for strategy: smart.
+type SmartConfig struct {
+	Mode                string                 `yaml:"mode,omitempty"` // off | shadow | live
+	Policy              string                 `yaml:"policy,omitempty"`
+	Classifier          SmartClassifierConfig  `yaml:"classifier,omitempty"`
+	ConfidenceThreshold float64                `yaml:"confidence_threshold,omitempty"`
+	LowConfidenceTarget string                 `yaml:"low_confidence_target,omitempty"` // provider:model
+	MinimumTaskMatch    float64                `yaml:"minimum_task_match,omitempty"`
+	StrictProfiles      *bool                  `yaml:"strict_profiles,omitempty"`
+	SessionAffinity     SessionAffinityConfig  `yaml:"session_affinity,omitempty"`
+	Logging             SmartLoggingConfig     `yaml:"logging,omitempty"`
+}
+
+type SmartClassifierConfig struct {
+	Type    string `yaml:"type,omitempty"` // heuristic | llm
+	Version string `yaml:"version,omitempty"`
+}
+
+type SessionAffinityConfig struct {
+	Enabled *bool    `yaml:"enabled,omitempty"`
+	TTL     Duration `yaml:"ttl,omitempty"`
+}
+
+type SmartLoggingConfig struct {
+	StoreTaskProfile *bool `yaml:"store_task_profile,omitempty"`
+	StorePrompt      *bool `yaml:"store_prompt,omitempty"`
+}
+
+// ModelProfileConfig is a user-defined or override model capability profile.
+type ModelProfileConfig struct {
+	Source       string             `yaml:"source,omitempty"`
+	Version      string             `yaml:"version,omitempty"`
+	Capabilities map[string]int     `yaml:"capabilities,omitempty"`
+	Properties   ModelPropertiesConfig `yaml:"properties,omitempty"`
+}
+
+type ModelPropertiesConfig struct {
+	Vision           *bool  `yaml:"vision,omitempty"`
+	Tools            *bool  `yaml:"tools,omitempty"`
+	ParallelTools    *bool  `yaml:"parallel_tools,omitempty"`
+	StructuredOutput *bool  `yaml:"structured_output,omitempty"`
+	Streaming        *bool  `yaml:"streaming,omitempty"`
+	ContextWindow    int    `yaml:"context_window,omitempty"`
+	MaxOutputTokens  int    `yaml:"max_output_tokens,omitempty"`
+	CostTier         int    `yaml:"cost_tier,omitempty"`
+	LatencyTier      int    `yaml:"latency_tier,omitempty"`
+	Privacy          string `yaml:"privacy,omitempty"`
 }
 
 type AliasConfig struct {
@@ -122,10 +183,11 @@ func Default() *Config {
 			MaxConcurrency: 64,
 			StrictMode:     true,
 		},
-		Credentials: CredentialsConfig{Backend: "vault"},
-		Providers:   map[string]ProviderConfig{},
-		Routes:      map[string]RouteConfig{},
-		Aliases:     map[string]AliasConfig{},
+		Credentials:   CredentialsConfig{Backend: "vault"},
+		Providers:     map[string]ProviderConfig{},
+		Routes:        map[string]RouteConfig{},
+		Aliases:       map[string]AliasConfig{},
+		ModelProfiles: map[string]ModelProfileConfig{},
 		Logging: LoggingConfig{
 			Level:         "info",
 			Payloads:      "metadata-only",
@@ -210,20 +272,85 @@ func (c *Config) Validate() error {
 		if !slugRE.MatchString(name) {
 			return fmt.Errorf("route %q: id must be lowercase slug", name)
 		}
-		switch r.Strategy {
-		case "direct", "fallback", "":
-		default:
-			return fmt.Errorf("route %q: strategy must be direct or fallback", name)
-		}
-		if len(r.Targets) == 0 {
-			return fmt.Errorf("route %q: at least one target is required", name)
-		}
-		for i, t := range r.Targets {
-			if t.Provider == "" || t.Model == "" {
-				return fmt.Errorf("route %q target[%d]: provider and model are required", name, i)
+		strategy := r.Strategy
+		if strategy == "" {
+			if len(r.Candidates) > 0 || r.Smart != nil {
+				strategy = "smart"
+			} else if len(r.Targets) > 1 {
+				strategy = "fallback"
+			} else {
+				strategy = "direct"
 			}
-			if _, ok := c.Providers[t.Provider]; !ok {
-				return fmt.Errorf("route %q target[%d]: unknown provider %q", name, i, t.Provider)
+		}
+		switch strategy {
+		case "direct", "fallback", "smart":
+		default:
+			return fmt.Errorf("route %q: strategy must be direct, fallback, or smart", name)
+		}
+		if strategy == "smart" {
+			if len(r.Candidates) == 0 && len(r.Targets) == 0 {
+				return fmt.Errorf("route %q: smart strategy requires candidates or targets", name)
+			}
+			cands := r.Candidates
+			if len(cands) == 0 {
+				// allow targets as candidates shorthand
+				for _, t := range r.Targets {
+					cands = append(cands, CandidateConfig{Provider: t.Provider, Model: t.Model})
+				}
+			}
+			for i, t := range cands {
+				if t.Provider == "" || t.Model == "" {
+					return fmt.Errorf("route %q candidate[%d]: provider and model are required", name, i)
+				}
+				if _, ok := c.Providers[t.Provider]; !ok {
+					return fmt.Errorf("route %q candidate[%d]: unknown provider %q", name, i, t.Provider)
+				}
+			}
+			if r.Smart != nil {
+				mode := strings.ToLower(r.Smart.Mode)
+				if mode != "" && mode != "off" && mode != "shadow" && mode != "live" {
+					return fmt.Errorf("route %q: smart.mode must be off, shadow, or live", name)
+				}
+				if r.Smart.Policy != "" {
+					switch strings.ToLower(r.Smart.Policy) {
+					case "balanced", "quality", "economy", "fast", "private":
+					default:
+						return fmt.Errorf("route %q: unknown smart.policy %q", name, r.Smart.Policy)
+					}
+				}
+			}
+		} else {
+			if len(r.Targets) == 0 {
+				return fmt.Errorf("route %q: at least one target is required", name)
+			}
+			for i, t := range r.Targets {
+				if t.Provider == "" || t.Model == "" {
+					return fmt.Errorf("route %q target[%d]: provider and model are required", name, i)
+				}
+				if _, ok := c.Providers[t.Provider]; !ok {
+					return fmt.Errorf("route %q target[%d]: unknown provider %q", name, i, t.Provider)
+				}
+			}
+		}
+	}
+
+	for id, mp := range c.ModelProfiles {
+		for cap, v := range mp.Capabilities {
+			if v < 0 || v > 5 {
+				return fmt.Errorf("model_profiles %q: capability %q must be 0–5", id, cap)
+			}
+		}
+		if mp.Properties.CostTier < 0 || mp.Properties.CostTier > 5 {
+			return fmt.Errorf("model_profiles %q: cost_tier must be 0–5", id)
+		}
+		if mp.Properties.LatencyTier < 0 || mp.Properties.LatencyTier > 5 {
+			return fmt.Errorf("model_profiles %q: latency_tier must be 0–5", id)
+		}
+		if mp.Properties.Privacy != "" {
+			switch mp.Properties.Privacy {
+			case "local", "private-cloud", "cloud":
+			default:
+				return fmt.Errorf("model_profiles %q: privacy must be local, private-cloud, or cloud", id)
 			}
 		}
 	}
@@ -282,7 +409,26 @@ func (c *Config) ExportSanitized() *Config {
 	for k, v := range c.Aliases {
 		out.Aliases[k] = v
 	}
+	out.ModelProfiles = make(map[string]ModelProfileConfig, len(c.ModelProfiles))
+	for k, v := range c.ModelProfiles {
+		out.ModelProfiles[k] = v
+	}
 	return &out
+}
+
+// ParseProviderModel splits "provider:model" or "provider/model".
+func ParseProviderModel(s string) (provider, model string, err error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", "", fmt.Errorf("empty provider:model")
+	}
+	if i := strings.IndexByte(s, ':'); i > 0 {
+		return s[:i], s[i+1:], nil
+	}
+	if i := strings.IndexByte(s, '/'); i > 0 {
+		return s[:i], s[i+1:], nil
+	}
+	return "", "", fmt.Errorf("invalid target %q (use provider:model)", s)
 }
 
 // ParseMaxRequestSize parses size strings like "20MiB".
