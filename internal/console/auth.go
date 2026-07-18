@@ -108,11 +108,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(`<!doctype html><html><head><meta charset="utf-8"><title>TermRouter Console — Sign in</title>
 <style>body{font-family:system-ui,sans-serif;background:#0f1115;color:#e5e7eb;display:flex;height:100vh;align-items:center;justify-content:center;margin:0}
 .card{background:#171a21;border:1px solid #23262f;border-radius:12px;padding:32px;max-width:380px;text-align:center}
-h1{font-size:18px;margin:0 0 8px}a.btn{display:inline-block;margin-top:16px;padding:10px 18px;background:#6366f1;color:#fff;border-radius:8px;text-decoration:none;font-weight:600}
+h1{font-size:18px;margin:0 0 8px}button{display:inline-block;margin-top:16px;padding:10px 18px;background:#6366f1;color:#fff;border-radius:8px;border:none;cursor:pointer;font-weight:600;font-size:14px}
 p{color:#9ca3af;font-size:13px}</style></head>
 <body><div class="card"><h1>TermRouter Console</h1><p>You are about to sign in to the local management console. This link is single-use.</p>
-<form method="post" action="/admin/v1/session/bootstrap"><input type="hidden" name="token" value="` + token + `"><button class="btn" type="submit">Sign in</button></form></div>
-<script>document.querySelector('form').addEventListener('submit',async e=>{e.preventDefault();const t=document.querySelector('input').value;const r=await fetch('/admin/v1/session/bootstrap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t})});if(r.ok){window.location.href='/';}else{alert('Sign in failed');}});</script>
+<form method="post" action="/admin/v1/session/bootstrap"><input type="hidden" name="token" value="` + token + `"><button type="submit">Sign in</button></form></div>
 </body></html>`))
 }
 
