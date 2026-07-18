@@ -16,7 +16,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 	ps := smart.NewProfileStore(smart.ProfilesFromConfig(rc.Cfg), true)
 	out := []map[string]any{}
-	for _, p := range rc.Cfg.Providers {
+	for name, p := range rc.Cfg.Providers {
 		adapter := adapterFor(p.Type)
 		if adapter == nil {
 			continue
@@ -33,7 +33,7 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		for _, m := range models {
 			prof, _ := ps.Resolve(p.Type, m.ID, "")
 			out = append(out, map[string]any{
-				"provider":   p.Type,
+				"provider":   name,
 				"model":      m.ID,
 				"id":         smart.ProfileKey(p.Type, m.ID),
 				"state":      "discovered",
