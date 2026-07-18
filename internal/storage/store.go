@@ -736,3 +736,78 @@ func (s *Store) PurgeExpiredAffinity(ctx context.Context) (int64, error) {
 	}
 	return res.RowsAffected()
 }
+
+// --- Config History ---
+
+type ConfigHistoryRecord struct {
+	Revision          int64     `json:"revision"`
+	Timestamp         time.Time `json:"timestamp"`
+	SessionID         string    `json:"session_id"`
+	ChangeType        string    `json:"change_type"`
+	AffectedResources string    `json:"affected_resources"`
+	ConfigYAML        string    `json:"config_yaml,omitempty"`
+	SanitizedYAML     string    `json:"sanitized_yaml,omitempty"`
+}
+
+func (s *Store) InsertConfigHistory(ctx context.Context, sessionID, changeType, affectedResources, configYAML, sanitizedYAML string) (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `
+		INSERT INTO config_history(timestamp, session_id, change_type, affected_resources, config_yaml, sanitized_yaml)
+		VALUES(?,?,?,?,?,?)`,
+		now, nullStr(sessionID), changeType, affectedResources, configYAML, sanitizedYAML,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) ListConfigHistory(ctx context.Context) ([]ConfigHistoryRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT revision, timestamp, session_id, change_type, affected_resources, sanitized_yaml
+		FROM config_history ORDER BY revision DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ConfigHistoryRecord
+	for rows.Next() {
+		var r ConfigHistoryRecord
+		var ts string
+		var sid, aff sql.NullString
+		if err := rows.Scan(&r.Revision, &ts, &sid, &r.ChangeType, &aff, &r.SanitizedYAML); err != nil {
+			return nil, err
+		}
+		r.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		r.SessionID = sid.String
+		r.AffectedResources = aff.String
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetConfigHistory(ctx context.Context, revision int64) (*ConfigHistoryRecord, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT revision, timestamp, session_id, change_type, affected_resources, config_yaml, sanitized_yaml
+		FROM config_history WHERE revision = ?`, revision)
+	var r ConfigHistoryRecord
+	var ts string
+	var sid, aff sql.NullString
+	err := row.Scan(&r.Revision, &ts, &sid, &r.ChangeType, &aff, &r.ConfigYAML, &r.SanitizedYAML)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+	r.SessionID = sid.String
+	r.AffectedResources = aff.String
+	return &r, nil
+}
+
+func (s *Store) GetLatestConfigRevision(ctx context.Context) (int64, error) {
+	var rev int64
+	err := s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(revision), 0) FROM config_history`).Scan(&rev)
+	return rev, err
+}

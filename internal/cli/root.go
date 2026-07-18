@@ -44,6 +44,7 @@ func Execute(version string) error {
 		newLogsCmd(),
 		newUsageCmd(),
 		newTestCmd(),
+		newConsoleCmd(),
 		newVersionCmd(),
 	)
 	return root.Execute()

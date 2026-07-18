@@ -103,6 +103,16 @@ CREATE TABLE IF NOT EXISTS smart_session_affinity (
 );
 
 CREATE INDEX IF NOT EXISTS idx_smart_affinity_expires ON smart_session_affinity(expires_at);
+
+CREATE TABLE IF NOT EXISTS config_history (
+    revision INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL,
+    session_id TEXT,
+    change_type TEXT NOT NULL,
+    affected_resources TEXT,
+    config_yaml TEXT NOT NULL,
+    sanitized_yaml TEXT NOT NULL
+);
 `
 
-const currentSchemaVersion = 2
+const currentSchemaVersion = 3

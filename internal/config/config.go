@@ -14,38 +14,38 @@ var slugRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 // Config is the human-editable TermRouter configuration (no plaintext secrets).
 type Config struct {
-	Server        ServerConfig                `yaml:"server"`
-	Credentials   CredentialsConfig           `yaml:"credentials"`
-	Providers     map[string]ProviderConfig   `yaml:"providers"`
-	Routes        map[string]RouteConfig      `yaml:"routes"`
-	Aliases       map[string]AliasConfig      `yaml:"aliases"`
-	ModelProfiles map[string]ModelProfileConfig `yaml:"model_profiles,omitempty"`
-	Logging       LoggingConfig               `yaml:"logging"`
+	Server        ServerConfig                `yaml:"server" json:"server"`
+	Credentials   CredentialsConfig           `yaml:"credentials" json:"credentials"`
+	Providers     map[string]ProviderConfig   `yaml:"providers" json:"providers"`
+	Routes        map[string]RouteConfig      `yaml:"routes" json:"routes"`
+	Aliases       map[string]AliasConfig      `yaml:"aliases" json:"aliases"`
+	ModelProfiles map[string]ModelProfileConfig `yaml:"model_profiles,omitempty" json:"model_profiles,omitempty"`
+	Logging       LoggingConfig               `yaml:"logging" json:"logging"`
 }
 
 type ServerConfig struct {
-	Host            string        `yaml:"host"`
-	Port            int           `yaml:"port"`
-	AuthRequired    bool          `yaml:"auth_required"`
-	RequestTimeout  Duration      `yaml:"request_timeout"`
-	MaxRequestSize  string        `yaml:"max_request_size"`
-	MaxConcurrency  int           `yaml:"max_concurrency"`
-	StrictMode      bool          `yaml:"strict_mode"`
-	InsecureRemote  bool          `yaml:"insecure_remote"`
-	AllowDirectModel bool         `yaml:"allow_direct_model"`
+	Host            string        `yaml:"host" json:"host"`
+	Port            int           `yaml:"port" json:"port"`
+	AuthRequired    bool          `yaml:"auth_required" json:"auth_required"`
+	RequestTimeout  Duration      `yaml:"request_timeout" json:"request_timeout"`
+	MaxRequestSize  string        `yaml:"max_request_size" json:"max_request_size"`
+	MaxConcurrency  int           `yaml:"max_concurrency" json:"max_concurrency"`
+	StrictMode      bool          `yaml:"strict_mode" json:"strict_mode"`
+	InsecureRemote  bool          `yaml:"insecure_remote" json:"insecure_remote"`
+	AllowDirectModel bool         `yaml:"allow_direct_model" json:"allow_direct_model"`
 }
 
 type CredentialsConfig struct {
-	Backend string `yaml:"backend"` // keyring | vault | env
+	Backend string `yaml:"backend" json:"backend"` // keyring | vault | env
 }
 
 type ProviderConfig struct {
-	Type          string            `yaml:"type"` // openai | anthropic | openai-compatible
-	BaseURL       string            `yaml:"base_url,omitempty"`
-	CredentialRef string            `yaml:"credential_ref,omitempty"`
-	Headers       map[string]string `yaml:"headers,omitempty"`
-	Enabled       *bool             `yaml:"enabled,omitempty"`
-	Timeout       Duration          `yaml:"timeout,omitempty"`
+	Type          string            `yaml:"type" json:"type"` // openai | anthropic | openai-compatible
+	BaseURL       string            `yaml:"base_url,omitempty" json:"base_url,omitempty"`
+	CredentialRef string            `yaml:"credential_ref,omitempty" json:"credential_ref,omitempty"`
+	Headers       map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
+	Enabled       *bool             `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Timeout       Duration          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
 }
 
 func (p ProviderConfig) IsEnabled() bool {
@@ -56,94 +56,115 @@ func (p ProviderConfig) IsEnabled() bool {
 }
 
 type RouteConfig struct {
-	Strategy   string            `yaml:"strategy"` // direct | fallback | smart
-	Targets    []TargetConfig    `yaml:"targets,omitempty"`
-	Candidates []CandidateConfig `yaml:"candidates,omitempty"` // smart routes
-	Smart      *SmartConfig      `yaml:"smart,omitempty"`
+	Strategy   string            `yaml:"strategy" json:"strategy"` // direct | fallback | smart
+	Targets    []TargetConfig    `yaml:"targets,omitempty" json:"targets,omitempty"`
+	Candidates []CandidateConfig `yaml:"candidates,omitempty" json:"candidates,omitempty"` // smart routes
+	Smart      *SmartConfig      `yaml:"smart,omitempty" json:"smart,omitempty"`
 	// Default target for smart routes (provider:model also accepted via Default string).
-	Default string `yaml:"default,omitempty"`
+	Default string `yaml:"default,omitempty" json:"default,omitempty"`
 }
 
 type TargetConfig struct {
-	Provider  string   `yaml:"provider"`
-	Model     string   `yaml:"model"`
-	Timeout   Duration `yaml:"timeout,omitempty"`
-	Weight    int      `yaml:"weight,omitempty"`
+	Provider  string   `yaml:"provider" json:"provider"`
+	Model     string   `yaml:"model" json:"model"`
+	Timeout   Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Weight    int      `yaml:"weight,omitempty" json:"weight,omitempty"`
 }
 
 // CandidateConfig is a smart-route candidate target.
 type CandidateConfig struct {
-	Provider string `yaml:"provider"`
-	Model    string `yaml:"model"`
-	Profile  string `yaml:"profile,omitempty"`
+	Provider string `yaml:"provider" json:"provider"`
+	Model    string `yaml:"model" json:"model"`
+	Profile  string `yaml:"profile,omitempty" json:"profile,omitempty"`
 }
 
 // SmartConfig configures task-aware selection for strategy: smart.
 type SmartConfig struct {
-	Mode                string                 `yaml:"mode,omitempty"` // off | shadow | live
-	Policy              string                 `yaml:"policy,omitempty"`
-	Classifier          SmartClassifierConfig  `yaml:"classifier,omitempty"`
-	ConfidenceThreshold float64                `yaml:"confidence_threshold,omitempty"`
-	LowConfidenceTarget string                 `yaml:"low_confidence_target,omitempty"` // provider:model
-	MinimumTaskMatch    float64                `yaml:"minimum_task_match,omitempty"`
-	StrictProfiles      *bool                  `yaml:"strict_profiles,omitempty"`
-	SessionAffinity     SessionAffinityConfig  `yaml:"session_affinity,omitempty"`
-	Logging             SmartLoggingConfig     `yaml:"logging,omitempty"`
+	Mode                string                 `yaml:"mode,omitempty" json:"mode,omitempty"` // off | shadow | live
+	Policy              string                 `yaml:"policy,omitempty" json:"policy,omitempty"`
+	Classifier          SmartClassifierConfig  `yaml:"classifier,omitempty" json:"classifier,omitempty"`
+	ConfidenceThreshold float64                `yaml:"confidence_threshold,omitempty" json:"confidence_threshold,omitempty"`
+	LowConfidenceTarget string                 `yaml:"low_confidence_target,omitempty" json:"low_confidence_target,omitempty"` // provider:model
+	MinimumTaskMatch    float64                `yaml:"minimum_task_match,omitempty" json:"minimum_task_match,omitempty"`
+	StrictProfiles      *bool                  `yaml:"strict_profiles,omitempty" json:"strict_profiles,omitempty"`
+	SessionAffinity     SessionAffinityConfig  `yaml:"session_affinity,omitempty" json:"session_affinity,omitempty"`
+	Logging             SmartLoggingConfig     `yaml:"logging,omitempty" json:"logging,omitempty"`
 }
 
 type SmartClassifierConfig struct {
-	Type    string `yaml:"type,omitempty"` // heuristic | llm
-	Version string `yaml:"version,omitempty"`
+	Type    string `yaml:"type,omitempty" json:"type,omitempty"` // heuristic | llm
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
 }
 
 type SessionAffinityConfig struct {
-	Enabled *bool    `yaml:"enabled,omitempty"`
-	TTL     Duration `yaml:"ttl,omitempty"`
+	Enabled *bool    `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	TTL     Duration `yaml:"ttl,omitempty" json:"ttl,omitempty"`
 }
 
 type SmartLoggingConfig struct {
-	StoreTaskProfile *bool `yaml:"store_task_profile,omitempty"`
-	StorePrompt      *bool `yaml:"store_prompt,omitempty"`
+	StoreTaskProfile *bool `yaml:"store_task_profile,omitempty" json:"store_task_profile,omitempty"`
+	StorePrompt      *bool `yaml:"store_prompt,omitempty" json:"store_prompt,omitempty"`
 }
 
 // ModelProfileConfig is a user-defined or override model capability profile.
 type ModelProfileConfig struct {
-	Source       string             `yaml:"source,omitempty"`
-	Version      string             `yaml:"version,omitempty"`
-	Capabilities map[string]int     `yaml:"capabilities,omitempty"`
-	Properties   ModelPropertiesConfig `yaml:"properties,omitempty"`
+	Source       string             `yaml:"source,omitempty" json:"source,omitempty"`
+	Version      string             `yaml:"version,omitempty" json:"version,omitempty"`
+	Capabilities map[string]int     `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Properties   ModelPropertiesConfig `yaml:"properties,omitempty" json:"properties,omitempty"`
 }
 
 type ModelPropertiesConfig struct {
-	Vision           *bool  `yaml:"vision,omitempty"`
-	Tools            *bool  `yaml:"tools,omitempty"`
-	ParallelTools    *bool  `yaml:"parallel_tools,omitempty"`
-	StructuredOutput *bool  `yaml:"structured_output,omitempty"`
-	Streaming        *bool  `yaml:"streaming,omitempty"`
-	ContextWindow    int    `yaml:"context_window,omitempty"`
-	MaxOutputTokens  int    `yaml:"max_output_tokens,omitempty"`
-	CostTier         int    `yaml:"cost_tier,omitempty"`
-	LatencyTier      int    `yaml:"latency_tier,omitempty"`
-	Privacy          string `yaml:"privacy,omitempty"`
+	Vision           *bool  `yaml:"vision,omitempty" json:"vision,omitempty"`
+	Tools            *bool  `yaml:"tools,omitempty" json:"tools,omitempty"`
+	ParallelTools    *bool  `yaml:"parallel_tools,omitempty" json:"parallel_tools,omitempty"`
+	StructuredOutput *bool  `yaml:"structured_output,omitempty" json:"structured_output,omitempty"`
+	Streaming        *bool  `yaml:"streaming,omitempty" json:"streaming,omitempty"`
+	ContextWindow    int    `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	MaxOutputTokens  int    `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	CostTier         int    `yaml:"cost_tier,omitempty" json:"cost_tier,omitempty"`
+	LatencyTier      int    `yaml:"latency_tier,omitempty" json:"latency_tier,omitempty"`
+	Privacy          string `yaml:"privacy,omitempty" json:"privacy,omitempty"`
 }
 
 type AliasConfig struct {
-	Route  string `yaml:"route,omitempty"`
+	Route  string `yaml:"route,omitempty" json:"route,omitempty"`
 	// Direct target shorthand (provider + model) when no route is used.
-	Provider string `yaml:"provider,omitempty"`
-	Model    string `yaml:"model,omitempty"`
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
 }
 
 type LoggingConfig struct {
-	Level         string `yaml:"level"`
-	Payloads      string `yaml:"payloads"` // metadata-only | errors | full | off
-	RetentionDays int    `yaml:"retention_days"`
+	Level         string `yaml:"level" json:"level"`
+	Payloads      string `yaml:"payloads" json:"payloads"` // metadata-only | errors | full | off
+	RetentionDays int    `yaml:"retention_days" json:"retention_days"`
 }
 
 // Duration wraps time.Duration for YAML marshaling.
 type Duration time.Duration
 
 func (d Duration) Duration() time.Duration { return time.Duration(d) }
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + time.Duration(d).String() + `"`), nil
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	s := string(data)
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		s = s[1 : len(s)-1]
+	}
+	if s == "" || s == "0" || s == `"0"` {
+		*d = 0
+		return nil
+	}
+	parsed, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	*d = Duration(parsed)
+	return nil
+}
 
 func (d Duration) MarshalYAML() (interface{}, error) {
 	return time.Duration(d).String(), nil

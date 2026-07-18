@@ -37,7 +37,8 @@ type Server struct {
 	http     *http.Server
 	started  time.Time
 	active   atomic.Int64
-	mu       sync.Mutex
+	mu       sync.RWMutex
+	handler  http.Handler
 }
 
 // New builds a server from loaded config and open storage.
@@ -47,7 +48,7 @@ func New(cfg *config.Config, paths config.Paths, store *storage.Store, creds *cr
 	reg.Register(compatible.NewCompatible())
 	reg.Register(panthropic.New())
 
-	return &Server{
+	s := &Server{
 		Cfg:      cfg,
 		Paths:    paths,
 		Store:    store,
@@ -55,10 +56,20 @@ func New(cfg *config.Config, paths config.Paths, store *storage.Store, creds *cr
 		Log:      log,
 		Registry: reg,
 	}
+	s.rebuildHandler()
+	return s
 }
 
-// Handler returns the HTTP handler (useful for tests).
-func (s *Server) Handler() http.Handler {
+// Reload updates the server's configuration and rebuilds the handler.
+func (s *Server) Reload(cfg *config.Config) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.Cfg = cfg
+	s.rebuildHandler()
+	return nil
+}
+
+func (s *Server) rebuildHandler() {
 	resolver := router.NewResolver(s.Cfg)
 	coord := execution.New(s.Registry, s.Creds, s.Store, s.Log)
 	timeout := s.Cfg.Server.RequestTimeout.Duration()
@@ -100,7 +111,17 @@ func (s *Server) Handler() http.Handler {
 	h = auth.Middleware(h)
 	h = middleware.MaxBytes(maxSize)(h)
 	h = middleware.RequestID(h)
-	return h
+	s.handler = h
+}
+
+// Handler returns the HTTP handler (useful for tests).
+func (s *Server) Handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.mu.RLock()
+		h := s.handler
+		s.mu.RUnlock()
+		h.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) trackActive(next http.Handler) http.Handler {
