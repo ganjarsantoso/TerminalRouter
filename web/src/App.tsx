@@ -27,6 +27,23 @@ import {
 // API helpers
 const API_BASE = '/admin/v1';
 
+// Compute available model IDs for a given provider by merging discovered
+// models (from the /models endpoint) with models already in config.
+function availableModels(discoveredModels: any[], providerName: string, config: any): string[] {
+  const discovered = discoveredModels
+    .filter((m: any) => m.provider === providerName)
+    .map((m: any) => m.model);
+  const configured: string[] = [];
+  Object.values(config.routes || {}).forEach((r: any) => {
+    (r.targets || []).forEach((t: any) => { if (t.provider === providerName && t.model) configured.push(t.model); });
+    (r.candidates || []).forEach((c: any) => { if (c.provider === providerName && c.model) configured.push(c.model); });
+  });
+  Object.values(config.aliases || {}).forEach((a: any) => {
+    if (a.provider === providerName && a.model) configured.push(a.model);
+  });
+  return [...new Set([...discovered, ...configured])].sort();
+}
+
 export default function App() {
   // Authentication & Session
   const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
@@ -235,7 +252,11 @@ export default function App() {
       // Fetch status to get provider health states
       const statusData = await apiCall(`${API_BASE}/status`);
       setProviderHealth(statusData.provider_health || statusData.health || {});
-      setDiscoveredModels(statusData.models || []);
+      // Fetch discovered models from the dedicated models endpoint
+      try {
+        const modelsData = await apiCall(`${API_BASE}/models`);
+        setDiscoveredModels(modelsData.models || []);
+      } catch (_) {}
     } catch (e) {}
   };
 
@@ -489,6 +510,7 @@ export default function App() {
               {currentTab === 'aliases' && (
                 <AliasesTab 
                   config={config}
+                  discoveredModels={discoveredModels}
                   apiCall={apiCall}
                   fetchConfig={fetchConfig}
                   toastSuccess={toastSuccess}
@@ -498,6 +520,7 @@ export default function App() {
               {currentTab === 'routes' && (
                 <RoutesTab 
                   config={config}
+                  discoveredModels={discoveredModels}
                   providerHealth={providerHealth}
                   apiCall={apiCall}
                   fetchConfig={fetchConfig}
@@ -508,6 +531,7 @@ export default function App() {
               {currentTab === 'smart' && (
                 <SmartRoutesTab 
                   config={config}
+                  discoveredModels={discoveredModels}
                   providerHealth={providerHealth}
                   apiCall={apiCall}
                   fetchConfig={fetchConfig}
@@ -1632,7 +1656,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
 // ----------------------------------------------------
 // ALIASES TAB
 // ----------------------------------------------------
-function AliasesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
+function AliasesTab({ config, discoveredModels, apiCall, fetchConfig, toastSuccess }: any) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [aliasName, setAliasName] = useState('');
   const [targetType, setTargetType] = useState('route'); // route | direct
@@ -1732,7 +1756,12 @@ function AliasesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
               </div>
               <div>
                 <label className="block text-xs font-semibold text-zinc-400 mb-1">Model ID</label>
-                <input type="text" required value={directModel} onChange={(e) => setDirectModel(e.target.value)} placeholder="gpt-4o" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
+                <input type="text" required value={directModel} onChange={(e) => setDirectModel(e.target.value)} placeholder="gpt-4o" list={`alias-models`} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
+                <datalist id="alias-models">
+                  {availableModels(discoveredModels, directProvider, config).map((m: string) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
               </div>
             </div>
           )}
@@ -1796,7 +1825,7 @@ function AliasesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
 // ----------------------------------------------------
 // ROUTES TAB
 // ----------------------------------------------------
-function RoutesTab({ config, providerHealth, apiCall, fetchConfig, toastSuccess }: any) {
+function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchConfig, toastSuccess }: any) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [routeName, setRouteName] = useState('');
   const [strategy, setStrategy] = useState('fallback'); // direct | fallback
@@ -1905,7 +1934,12 @@ function RoutesTab({ config, providerHealth, apiCall, fetchConfig, toastSuccess 
                 <select value={t.provider} onChange={(e) => updateTarget(idx, 'provider', e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1">
                   {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
                 </select>
-                <input type="text" required placeholder="Model ID (e.g. gpt-4o-mini)" value={t.model} onChange={(e) => updateTarget(idx, 'model', e.target.value)} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1" />
+                <input type="text" required placeholder="Model ID (e.g. gpt-4o-mini)" value={t.model} onChange={(e) => updateTarget(idx, 'model', e.target.value)} list={`target-models-${idx}`} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1" />
+                <datalist id={`target-models-${idx}`}>
+                  {availableModels(discoveredModels, t.provider, config).map((m: string) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
                 <input type="text" placeholder="Timeout (e.g. 30s)" value={t.timeout} onChange={(e) => updateTarget(idx, 'timeout', e.target.value)} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 w-24 font-mono" />
                 <button type="button" disabled={targets.length === 1} onClick={() => removeTargetRow(idx)} className="text-rose-400 hover:text-rose-200 disabled:opacity-40 p-2"><Trash2 className="h-4 w-4" /></button>
               </div>
@@ -1974,7 +2008,7 @@ function RoutesTab({ config, providerHealth, apiCall, fetchConfig, toastSuccess 
 // ----------------------------------------------------
 // SMART ROUTES TAB
 // ----------------------------------------------------
-function SmartRoutesTab({ config, providerHealth, apiCall, fetchConfig, toastSuccess }: any) {
+function SmartRoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchConfig, toastSuccess }: any) {
   const [showAddForm, setShowAddForm] = useState(false);
   const [routeName, setRouteName] = useState('');
   const [policy, setPolicy] = useState('balanced');
@@ -2141,7 +2175,12 @@ function SmartRoutesTab({ config, providerHealth, apiCall, fetchConfig, toastSuc
                 <select value={c.provider} onChange={(e) => updateCandidate(idx, 'provider', e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1">
                   {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
                 </select>
-                <input type="text" required placeholder="Model ID (e.g. gpt-4o-mini)" value={c.model} onChange={(e) => updateCandidate(idx, 'model', e.target.value)} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1 font-mono" />
+                <input type="text" required placeholder="Model ID (e.g. gpt-4o-mini)" value={c.model} onChange={(e) => updateCandidate(idx, 'model', e.target.value)} list={`candidate-models-${idx}`} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1 font-mono" />
+                <datalist id={`candidate-models-${idx}`}>
+                  {availableModels(discoveredModels, c.provider, config).map((m: string) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
                 <button type="button" disabled={candidates.length === 1} onClick={() => removeCandidateRow(idx)} className="text-rose-400 hover:text-rose-200 disabled:opacity-40 p-2"><Trash2 className="h-4 w-4" /></button>
               </div>
             ))}

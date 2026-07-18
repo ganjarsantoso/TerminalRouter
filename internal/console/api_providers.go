@@ -390,7 +390,11 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 	} else {
 		add("model_listing", true, fmt.Sprintf("%d models", len(models)))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "stages": stages, "model_count": len(models)})
+	modelIDs := make([]string, 0, len(models))
+	for _, m := range models {
+		modelIDs = append(modelIDs, m.ID)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "stages": stages, "models": modelIDs, "model_count": len(models)})
 }
 
 func (s *Server) handleRefreshProviderModels(w http.ResponseWriter, r *http.Request) {
