@@ -41,17 +41,28 @@ func generateCSRFToken() string {
 
 // handleBootstrap exchanges a one-time bootstrap token for an admin session.
 func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Token string `json:"token"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
-		return
+	var token string
+	ct := r.Header.Get("Content-Type")
+	if len(ct) >= 19 && ct[:19] == "application/json" {
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := decodeJSON(r, &body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
+			return
+		}
+		token = body.Token
+	} else {
+		if err := r.ParseForm(); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", "invalid form body")
+			return
+		}
+		token = r.FormValue("token")
 	}
 	s.mu.Lock()
 	expected := s.bootstrapToken
 	s.mu.Unlock()
-	if expected == "" || subtle.ConstantTimeCompare([]byte(body.Token), []byte(expected)) != 1 {
+	if expected == "" || subtle.ConstantTimeCompare([]byte(token), []byte(expected)) != 1 {
 		writeError(w, http.StatusUnauthorized, "invalid_token", "bootstrap token invalid or already used")
 		return
 	}
@@ -66,11 +77,17 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	csrf := generateCSRFToken()
 	s.setSessionCookie(w, sid)
 	s.setCSRFCookie(w, csrf)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"session":    map[string]any{"id": sid},
-		"csrf":       csrf,
-		"csrf_token": csrf,
-	})
+
+	// If form-encoded (no JS), redirect to the console. Otherwise return JSON for fetch().
+	if ct := r.Header.Get("Content-Type"); len(ct) >= 19 && ct[:19] == "application/json" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"session":    map[string]any{"id": sid},
+			"csrf":       csrf,
+			"csrf_token": csrf,
+		})
+	} else {
+		http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
+	}
 }
 
 // handleLogin renders a tiny HTML page that posts the token to bootstrap.
