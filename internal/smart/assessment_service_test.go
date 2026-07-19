@@ -465,7 +465,7 @@ func TestProfileStoreResolve_WithAssessments(t *testing.T) {
 			Capabilities: map[string]float64{CapGeneral: 4, CapCoding: 4},
 		},
 	}
-	ps := NewProfileStoreWithAssessments(userProfiles, assessProfiles, true)
+	ps := NewProfileStoreWithAssessments(userProfiles, assessProfiles, nil, true)
 	prof, found := ps.Resolve("openai", "gpt-4o", "")
 	if !found {
 		t.Fatal("expected profile to be resolved")
@@ -485,7 +485,7 @@ func TestProfileStoreResolve_AssessmentBaseline(t *testing.T) {
 			Capabilities: map[string]float64{CapGeneral: 4, CapCoding: 4},
 		},
 	}
-	ps := NewProfileStoreWithAssessments(nil, assessProfiles, true)
+	ps := NewProfileStoreWithAssessments(nil, assessProfiles, nil, true)
 	prof, found := ps.Resolve("openai", "gpt-4o", "")
 	if !found {
 		t.Fatal("expected profile to be resolved")

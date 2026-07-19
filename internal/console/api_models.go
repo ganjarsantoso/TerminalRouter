@@ -8,13 +8,26 @@ import (
 	"github.com/termrouter/termrouter/internal/smart"
 )
 
+// allProfilesFromConfig returns every config profile (user + external) keyed by id.
+func allProfilesFromConfig(cfg *config.Config) map[string]smart.ModelProfile {
+	user, external := smart.SplitProfilesFromConfig(cfg)
+	out := make(map[string]smart.ModelProfile, len(user)+len(external))
+	for k, v := range user {
+		out[k] = v
+	}
+	for k, v := range external {
+		out[k] = v
+	}
+	return out
+}
+
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	rc, err := s.loadConfig()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
 		return
 	}
-	ps := smart.NewProfileStore(smart.ProfilesFromConfig(rc.Cfg), true)
+	ps := smart.NewProfileStoreFromConfig(rc.Cfg, true)
 	out := []map[string]any{}
 	for name, p := range rc.Cfg.Providers {
 		adapter := adapterFor(p.Type)
@@ -75,7 +88,7 @@ func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
 		return
 	}
-	ps := smart.NewProfileStore(smart.ProfilesFromConfig(rc.Cfg), true)
+	ps := smart.NewProfileStoreFromConfig(rc.Cfg, true)
 	rows := []map[string]any{}
 	for _, k := range smart.ListBuiltinKeys() {
 		p, _ := ps.Resolve("", "", k)
@@ -110,7 +123,7 @@ func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
 		return
 	}
-	ps := smart.NewProfileStore(smart.ProfilesFromConfig(rc.Cfg), true)
+	ps := smart.NewProfileStoreFromConfig(rc.Cfg, true)
 	provider, model := splitProfileID(id)
 	p, found := ps.Resolve(provider, model, id)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -147,7 +160,7 @@ func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 		mp.Source = smart.SourceUser
 		cfg.ModelProfiles[id] = mp
 		// Validate via smart package.
-		prof := smart.ProfilesFromConfig(cfg)[id]
+		prof := allProfilesFromConfig(cfg)[id]
 		return smart.ValidateProfile(prof)
 	})
 	if err != nil {
@@ -180,7 +193,7 @@ func (s *Server) handleValidateProfile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "config_error", err.Error())
 		return
 	}
-	ps := smart.NewProfileStore(smart.ProfilesFromConfig(rc.Cfg), true)
+	ps := smart.NewProfileStoreFromConfig(rc.Cfg, true)
 	provider, model := splitProfileID(id)
 	p, _ := ps.Resolve(provider, model, id)
 	if err := smart.ValidateProfile(p); err != nil {

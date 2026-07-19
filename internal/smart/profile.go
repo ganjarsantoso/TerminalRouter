@@ -12,6 +12,8 @@ type ProfileStore struct {
 	User map[string]ModelProfile
 	// Assessment baselines keyed by provider/model.
 	Assessments map[string]ModelProfile
+	// External consensus baselines keyed by provider/model.
+	External map[string]ModelProfile
 	// Strict rejects unprofiled candidates from smart routes.
 	Strict bool
 }
@@ -21,18 +23,29 @@ func NewProfileStore(user map[string]ModelProfile, strict bool) *ProfileStore {
 	if user == nil {
 		user = map[string]ModelProfile{}
 	}
-	return &ProfileStore{User: user, Assessments: map[string]ModelProfile{}, Strict: strict}
+	return &ProfileStore{User: user, Assessments: map[string]ModelProfile{}, External: map[string]ModelProfile{}, Strict: strict}
 }
 
 // NewProfileStoreWithAssessments builds a store with user profiles and assessment baselines.
-func NewProfileStoreWithAssessments(user, assessments map[string]ModelProfile, strict bool) *ProfileStore {
+func NewProfileStoreWithAssessments(user, assessments, external map[string]ModelProfile, strict bool) *ProfileStore {
 	if user == nil {
 		user = map[string]ModelProfile{}
 	}
 	if assessments == nil {
 		assessments = map[string]ModelProfile{}
 	}
-	return &ProfileStore{User: user, Assessments: assessments, Strict: strict}
+	if external == nil {
+		external = map[string]ModelProfile{}
+	}
+	return &ProfileStore{User: user, Assessments: assessments, External: external, Strict: strict}
+}
+
+// SetExternalBaselines replaces the external consensus baselines.
+func (s *ProfileStore) SetExternalBaselines(external map[string]ModelProfile) {
+	if external == nil {
+		external = map[string]ModelProfile{}
+	}
+	s.External = external
 }
 
 // Resolve returns the effective profile for a candidate.
@@ -73,6 +86,23 @@ func (s *ProfileStore) Resolve(providerID, modelID, profileID string) (ModelProf
 			}
 			if p.Source == "" {
 				p.Source = SourceSelfAssess
+			}
+			return mergeWithDefaults(p), true
+		}
+	}
+
+	// External consensus baseline (independent benchmarks).
+	for _, k := range keys {
+		if p, ok := s.External[k]; ok {
+			p.ID = k
+			if p.ProviderID == "" {
+				p.ProviderID = providerID
+			}
+			if p.ModelID == "" {
+				p.ModelID = modelID
+			}
+			if p.Source == "" {
+				p.Source = SourceExternal
 			}
 			return mergeWithDefaults(p), true
 		}

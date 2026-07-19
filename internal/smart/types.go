@@ -47,6 +47,7 @@ const (
 	SourceUser        = "user"
 	SourceObserved    = "observed"
 	SourceSelfAssess  = "self-assessment"
+	SourceExternal    = "external-consensus"
 	SourceUnknown     = "unknown"
 )
 

@@ -18,9 +18,11 @@ func (s *Server) getAssessmentService() *smart.ModelAssessmentService {
 	if err != nil {
 		return nil
 	}
+	userProfiles, extProfiles := smart.SplitProfilesFromConfig(rc.Cfg)
 	ps := smart.NewProfileStoreWithAssessments(
-		smart.ProfilesFromConfig(rc.Cfg),
+		userProfiles,
 		map[string]smart.ModelProfile{},
+		extProfiles,
 		true,
 	)
 	credCheck := func(providerID string) bool {

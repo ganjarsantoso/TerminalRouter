@@ -9,9 +9,17 @@ import (
 
 // ProfilesFromConfig converts config model_profiles to smart profiles.
 func ProfilesFromConfig(cfg *config.Config) map[string]ModelProfile {
-	out := map[string]ModelProfile{}
+	user, _ := SplitProfilesFromConfig(cfg)
+	return user
+}
+
+// SplitProfilesFromConfig separates config model_profiles into user overrides and
+// external-consensus baselines based on their declared source.
+func SplitProfilesFromConfig(cfg *config.Config) (user, external map[string]ModelProfile) {
+	user = map[string]ModelProfile{}
+	external = map[string]ModelProfile{}
 	if cfg == nil {
-		return out
+		return user, external
 	}
 	for id, mp := range cfg.ModelProfiles {
 		p := ModelProfile{
@@ -43,9 +51,20 @@ func ProfilesFromConfig(cfg *config.Config) map[string]ModelProfile {
 			p.ProviderID = id[:i]
 			p.ModelID = id[i+1:]
 		}
-		out[id] = p
+		if p.Source == SourceExternal {
+			external[id] = p
+		} else {
+			user[id] = p
+		}
 	}
-	return out
+	return user, external
+}
+
+// NewProfileStoreFromConfig builds a ProfileStore separating user overrides and
+// external-consensus baselines by their declared source.
+func NewProfileStoreFromConfig(cfg *config.Config, strict bool) *ProfileStore {
+	user, external := SplitProfilesFromConfig(cfg)
+	return NewProfileStoreWithAssessments(user, nil, external, strict)
 }
 
 // ProfileToConfig converts a smart profile to config form for saving.

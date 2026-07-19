@@ -22,7 +22,8 @@ type ApplyResult struct {
 // GatewayEngine builds a smart engine from runtime deps.
 func GatewayEngine(cfg *config.Config, store *storage.Store, credsCredentialCheck func(ref string) bool) *Engine {
 	strict := true
-	profiles := NewProfileStore(ProfilesFromConfig(cfg), strict)
+	userProfiles, extProfiles := SplitProfilesFromConfig(cfg)
+	profiles := NewProfileStoreWithAssessments(userProfiles, nil, extProfiles, strict)
 	eng := &Engine{
 		Profiles:  profiles,
 		Providers: map[string]ProviderState{},
