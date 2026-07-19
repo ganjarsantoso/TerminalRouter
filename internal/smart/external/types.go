@@ -20,6 +20,38 @@ type SearchResult struct {
 	URL     string `json:"url"`
 }
 
+// PageText is the extracted, benchmark-relevant text of a fetched web page.
+type PageText struct {
+	URL   string `json:"url"`
+	Title string `json:"title"`
+	Text  string `json:"text"`
+}
+
+// Summarizer uses a language model to read fetched benchmark pages and produce
+// structured 0-10 capability estimates for a model. This replaces fragile
+// regex extraction with model judgment over real sources.
+type Summarizer interface {
+	// SummarizeEvidence reads the supplied pages and returns a per-capability
+	// estimate on the universal 0-10 scale, with an evidence URL and confidence.
+	SummarizeEvidence(ctx context.Context, modelName string, pages []PageText) (Summary, error)
+}
+
+// Summary is the structured output of a Summarizer.
+type Summary struct {
+	Capabilities []SummaryCapability `json:"capabilities"`
+	Confidence   float64              `json:"confidence"`
+	Sources      []string             `json:"sources"`
+}
+
+// SummaryCapability is one model-judged capability estimate.
+type SummaryCapability struct {
+	Capability CapabilityKey `json:"capability"`
+	Score      float64       `json:"score"`      // 0-10, 0.5 increments
+	Confidence float64       `json:"confidence"` // 0-1
+	Evidence   string        `json:"evidence"`   // URL or short citation
+	Note       string        `json:"note,omitempty"`
+}
+
 
 // SourceID identifies a curated, independent benchmark source.
 type SourceID string

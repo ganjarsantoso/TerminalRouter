@@ -13,8 +13,7 @@ import (
 )
 
 // DefaultSearcher returns the default live web searcher (DuckDuckGo HTML,
-// no API key required). Override via NewService(store, customSearcher) to use
-// a different backend.
+// no API key required). It is used by NewService when no searcher is injected.
 func DefaultSearcher() Searcher {
 	return &WebSearcher{
 		Client: &http.Client{Timeout: 15 * time.Second},
@@ -78,11 +77,22 @@ func (w *WebSearcher) Search(ctx context.Context, query string) ([]SearchResult,
 		if i >= enrichLimit || r.URL == "" {
 			continue
 		}
-		if pageText, err := w.fetchPageText(ctx, client, r.URL); err == nil && pageText != "" {
+		if pageText, err := w.FetchPage(r.URL); err == nil && pageText != "" {
 			results[i].Snippet = r.Snippet + " " + pageText
 		}
 	}
 	return results, nil
+}
+
+// FetchPage implements PageFetcher: fetches a page and returns benchmark-
+// relevant lines (those containing a percentage or Elo near a benchmark
+// keyword), truncated.
+func (w *WebSearcher) FetchPage(pageURL string) (string, error) {
+	client := w.Client
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	return w.fetchPageText(context.Background(), client, pageURL)
 }
 
 // fetchPageText fetches a page and returns benchmark-relevant lines (those

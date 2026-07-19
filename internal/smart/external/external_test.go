@@ -18,7 +18,7 @@ func (mockSearcher) Search(_ context.Context, _ string) ([]SearchResult, error) 
 }
 
 func newTestService() *Service {
-	return NewService(nil, mockSearcher{})
+	return NewService(nil, mockSearcher{}, nil)
 }
 
 func TestRegistryInfo(t *testing.T) {

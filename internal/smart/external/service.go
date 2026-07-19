@@ -31,19 +31,22 @@ type Provider interface {
 }
 
 // Service is the external-evidence service used by console and CLI. Evidence is
-// fetched live via the injected Searcher and cached locally (offline-first).
+// fetched live via the injected Searcher, optionally summarized by an LLM, and
+// cached locally (offline-first).
 type Service struct {
-	store    Provider
-	searcher Searcher
+	store      Provider
+	searcher   Searcher
+	summarizer Summarizer
 }
 
 // NewService builds a Service backed by the given persistence provider and a
-// web searcher. If searcher is nil, a default live searcher is used.
-func NewService(store Provider, searcher Searcher) *Service {
+// web searcher. If searcher is nil, a default live searcher is used. summarizer
+// may be nil (falls back to regex extraction).
+func NewService(store Provider, searcher Searcher, summarizer Summarizer) *Service {
 	if searcher == nil {
 		searcher = DefaultSearcher()
 	}
-	return &Service{store: store, searcher: searcher}
+	return &Service{store: store, searcher: searcher, summarizer: summarizer}
 }
 
 // RegistryInfo returns metadata about the bundled methodology/registry.
@@ -84,7 +87,15 @@ func (s *Service) Search(ctx context.Context, providerID, modelID string) (*Cons
 		}
 		all = append(all, res...)
 	}
-	recs := extractEvidence(id, all)
+
+	var recs []EvidenceRecord
+	if s.summarizer != nil {
+		recs = summarizeEvidence(ctx, s.summarizer, s.searcher, id, all)
+	}
+	if len(recs) == 0 {
+		// Fallback to regex extraction when no summarizer is configured.
+		recs = extractEvidence(id, all)
+	}
 	if len(recs) == 0 {
 		return nil, true // known model, but no evidence found live
 	}

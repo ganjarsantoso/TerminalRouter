@@ -8,10 +8,15 @@ import (
 	"github.com/termrouter/termrouter/internal/smart/external"
 )
 
-// getExternalService returns an ExternalEvidenceService backed by the store and
-// a live web searcher.
+// getExternalService returns an ExternalEvidenceService backed by the store, a
+// live web searcher, and an LLM summarizer that reads fetched pages.
 func (s *Server) getExternalService() *external.Service {
-	return external.NewService(s.Store, nil)
+	cfg, err := s.loadConfig()
+	if err != nil {
+		cfg = &revisionedConfig{Cfg: &config.Config{}}
+	}
+	summarizer := NewProviderSummarizer(cfg.Cfg, s.Creds, summarizerTarget{})
+	return external.NewService(s.Store, nil, summarizer)
 }
 
 func (s *Server) handleExternalRegistryInfo(w http.ResponseWriter, r *http.Request) {

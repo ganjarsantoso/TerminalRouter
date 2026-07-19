@@ -30,7 +30,7 @@ func newExternalService() (*external.Service, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return external.NewService(store, nil), func() { store.Close() }, nil
+	return external.NewService(store, nil, nil), func() { store.Close() }, nil
 }
 
 func modelExternalRegistry() *cobra.Command {
