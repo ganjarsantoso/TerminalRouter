@@ -12,7 +12,6 @@ import {
   Plus, 
   Key, 
   ChevronRight, 
-  FileText, 
   Database, 
   Unlock, 
   Cpu, 
@@ -26,6 +25,85 @@ import {
 
 // API helpers
 const API_BASE = '/admin/v1';
+
+// Build unified route list from existing config structures.
+// Groups aliases pointing to the same route, detects direct aliases as Single Model,
+// and surfaces unassigned internal routes.
+function buildUnifiedRoutes(config: any, providerHealth: any): any[] {
+  const routes: any[] = [];
+  const aliasByRoute: Record<string, { name: string; isPrimary: boolean }[]> = {};
+  const directAliases: { name: string; provider: string; model: string }[] = [];
+
+  Object.entries(config.aliases || {}).forEach(([name, a]: any) => {
+    if (a.route) {
+      if (!aliasByRoute[a.route]) aliasByRoute[a.route] = [];
+      aliasByRoute[a.route].push({ name, isPrimary: aliasByRoute[a.route].length === 0 });
+    } else {
+      directAliases.push({ name, provider: a.provider, model: a.model });
+    }
+  });
+
+  Object.entries(config.routes || {}).forEach(([rName, r]: any) => {
+    const aliases = aliasByRoute[rName] || [];
+    const primaryAlias = aliases.find((a: any) => a.isPrimary) || aliases[0];
+    const additionalAliases = aliases.filter((a: any) => a !== primaryAlias).map((a: any) => a.name);
+
+    if (r.strategy === 'smart') {
+      const sConf = r.smart || {};
+      const candidateCount = r.candidates?.length || 0;
+      routes.push({
+        id: rName,
+        name: primaryAlias?.name || rName,
+        aliases: additionalAliases,
+        mode: 'smart',
+        enabled: sConf.mode !== 'off',
+        internalId: rName,
+        summary: `${candidateCount} candidates · ${sConf.policy || 'balanced'} policy`,
+        health: `${candidateCount} candidates`,
+        status: sConf.mode || 'off',
+        smart: sConf,
+        candidates: r.candidates || []
+      });
+    } else {
+      const targetCount = r.targets?.length || 0;
+      const healthyTargets = (r.targets || []).filter((t: any) => {
+        const ph = providerHealth?.[t.provider] || {};
+        return ph.circuit !== 'open';
+      }).length;
+      routes.push({
+        id: rName,
+        name: primaryAlias?.name || rName,
+        aliases: additionalAliases,
+        mode: 'fallback',
+        enabled: true,
+        internalId: rName,
+        summary: `${targetCount} ordered targets`,
+        health: `${healthyTargets} of ${targetCount} targets available`,
+        status: healthyTargets > 0 ? 'healthy' : 'degraded',
+        fallback: { targets: r.targets || [] }
+      });
+    }
+  });
+
+  directAliases.forEach((d) => {
+    const ph = providerHealth?.[d.provider] || {};
+    const isHealthy = ph.circuit !== 'open';
+    routes.push({
+      id: d.name,
+      name: d.name,
+      aliases: [],
+      mode: 'single',
+      enabled: true,
+      internalId: null,
+      summary: `${d.provider} / ${d.model}`,
+      health: isHealthy ? 'Healthy' : 'Unhealthy',
+      status: isHealthy ? 'healthy' : 'degraded',
+      single: { provider: d.provider, model: d.model }
+    });
+  });
+
+  return routes;
+}
 
 // Compute available model IDs for a given provider by merging discovered
 // models (from the /models endpoint) with models already in config.
@@ -340,7 +418,6 @@ export default function App() {
               {/* Navigation Items */}
               <nav className="p-4 space-y-6">
                 <div>
-                  <div className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider px-3 mb-2">Overview</div>
                   <SidebarItem 
                     icon={<Layers className="h-4 w-4" />} 
                     label="Dashboard" 
@@ -359,28 +436,16 @@ export default function App() {
                       onClick={() => setCurrentTab('providers')} 
                     />
                     <SidebarItem 
-                      icon={<Cpu className="h-4 w-4" />} 
-                      label="Models & Profiles" 
-                      active={currentTab === 'profiles'} 
-                      onClick={() => setCurrentTab('profiles')} 
-                    />
-                    <SidebarItem 
-                      icon={<FileText className="h-4 w-4" />} 
-                      label="Aliases" 
-                      active={currentTab === 'aliases'} 
-                      onClick={() => setCurrentTab('aliases')} 
-                    />
-                    <SidebarItem 
                       icon={<Sliders className="h-4 w-4" />} 
                       label="Routes" 
                       active={currentTab === 'routes'} 
                       onClick={() => setCurrentTab('routes')} 
                     />
                     <SidebarItem 
-                      icon={<Activity className="h-4 w-4" />} 
-                      label="Smart Routes" 
-                      active={currentTab === 'smart'} 
-                      onClick={() => setCurrentTab('smart')} 
+                      icon={<Cpu className="h-4 w-4" />} 
+                      label="Model Profiles" 
+                      active={currentTab === 'profiles'} 
+                      onClick={() => setCurrentTab('profiles')} 
                     />
                   </div>
                 </div>
@@ -414,7 +479,7 @@ export default function App() {
                   <div className="space-y-1">
                     <SidebarItem 
                       icon={<Settings className="h-4 w-4" />} 
-                      label="Diagnostics / History" 
+                      label="Settings" 
                       active={currentTab === 'system'} 
                       onClick={() => setCurrentTab('system')} 
                     />
@@ -507,29 +572,8 @@ export default function App() {
                 />
               )}
 
-              {currentTab === 'aliases' && (
-                <AliasesTab 
-                  config={config}
-                  discoveredModels={discoveredModels}
-                  apiCall={apiCall}
-                  fetchConfig={fetchConfig}
-                  toastSuccess={toastSuccess}
-                />
-              )}
-
               {currentTab === 'routes' && (
                 <RoutesTab 
-                  config={config}
-                  discoveredModels={discoveredModels}
-                  providerHealth={providerHealth}
-                  apiCall={apiCall}
-                  fetchConfig={fetchConfig}
-                  toastSuccess={toastSuccess}
-                />
-              )}
-
-              {currentTab === 'smart' && (
-                <SmartRoutesTab 
                   config={config}
                   discoveredModels={discoveredModels}
                   providerHealth={providerHealth}
@@ -915,7 +959,7 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
         {step === 4 && (
           <div className="space-y-6">
             <h3 className="text-xl font-semibold">Model Discovery & Routing</h3>
-            <p className="text-zinc-400 text-sm">TermRouter uses public aliases to map requests to models. Let's create an alias named <span className="font-semibold text-indigo-400">general</span> that points to a specific model.</p>
+            <p className="text-zinc-400 text-sm">TermRouter uses public model names to map requests to models. Let's create a route named <span className="font-semibold text-indigo-400">general</span> that points to a specific model.</p>
 
             {testResult?.models && testResult.models.length > 0 ? (
               <div>
@@ -931,7 +975,7 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
               </div>
             )}
             <p className="text-xs text-zinc-500 leading-relaxed">
-              When client apps call TermRouter requesting the model <code className="font-mono text-zinc-400">general</code>, it will execute against provider <code className="font-mono text-zinc-400">{providerName}</code> with target model <code className="font-mono text-zinc-400">{selectedModel || customModel || 'gpt-4o'}</code>.
+              When client apps call TermRouter requesting the model <code className="font-mono text-zinc-400">general</code> (Single Model route), it will always execute against provider <code className="font-mono text-zinc-400">{providerName}</code> with target model <code className="font-mono text-zinc-400">{selectedModel || customModel || 'gpt-4o'}</code>.
             </p>
           </div>
         )}
@@ -944,7 +988,7 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
               <label className="block text-xs font-semibold text-zinc-400 mb-1">Client Key Name</label>
               <input type="text" value={clientKeyName} onChange={(e) => setClientKeyName(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
             </div>
-            <p className="text-xs text-zinc-500">This key will have access to the <code className="font-mono text-zinc-400">general</code> alias we created.</p>
+            <p className="text-xs text-zinc-500">This key will have access to the <code className="font-mono text-zinc-400">general</code> route we created.</p>
             <button 
               onClick={handleFinishSetup}
               className="w-full flex items-center justify-center gap-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-3 font-semibold text-sm transition-all"
@@ -989,7 +1033,8 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
   -d '{
     "model": "general",
     "messages": [{"role": "user", "content": "Hello!"}]
-  }'`}
+  }'  
+# "general" is the public route name → resolves to ${providerName}/${selectedModel || customModel || 'gpt-4o'}`}
               </pre>
             </div>
 
@@ -1036,17 +1081,41 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
 // ----------------------------------------------------
 function OverviewTab({ config, providerHealth, usageSummary, activities, diagnostics, setCurrentTab }: any) {
   const providersCount = Object.keys(config.providers || {}).length;
-  const aliasesCount = Object.keys(config.aliases || {}).length;
+
+  const unifiedRoutes = buildUnifiedRoutes(config, {});
+  const singleCount = unifiedRoutes.filter((r: any) => r.mode === 'single').length;
+  const fallbackCount = unifiedRoutes.filter((r: any) => r.mode === 'fallback').length;
+  const smartCount = unifiedRoutes.filter((r: any) => r.mode === 'smart').length;
+  const publicRouteCount = unifiedRoutes.length;
 
   return (
     <div className="space-y-8">
       {/* Top row cards */}
       <div className="grid grid-cols-4 gap-6">
         <StatCard title="Total Providers" value={providersCount} icon={<Database className="h-5 w-5 text-indigo-400" />} />
-        <StatCard title="Active Aliases" value={aliasesCount} icon={<FileText className="h-5 w-5 text-teal-400" />} />
+        <StatCard title="Public Routes" value={publicRouteCount} icon={<Sliders className="h-5 w-5 text-teal-400" />} />
         <StatCard title="Request Load (Today)" value={usageSummary.TotalRequests} icon={<Activity className="h-5 w-5 text-indigo-400" />} />
         <StatCard title="Error Rate" value={usageSummary.TotalRequests > 0 ? `${((usageSummary.ErrorCount / usageSummary.TotalRequests) * 100).toFixed(1)}%` : '0%'} icon={<AlertCircle className="h-5 w-5 text-rose-400" />} />
       </div>
+
+      {/* Route mode breakdown */}
+      {publicRouteCount > 0 && (
+        <div className="flex items-center gap-4 text-xs text-zinc-400">
+          <span className="font-semibold text-zinc-300">Route breakdown:</span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
+            Single Model: {singleCount}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-amber-500"></span>
+            Fallback: {fallbackCount}
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+            Smart: {smartCount}
+          </span>
+        </div>
+      )}
 
       <div className="grid grid-cols-3 gap-8">
         {/* Provider Health list */}
@@ -1127,7 +1196,7 @@ function OverviewTab({ config, providerHealth, usageSummary, activities, diagnos
               <thead>
                 <tr className="border-b border-zinc-800 text-zinc-400 font-semibold uppercase tracking-wider">
                   <th className="pb-3">Time</th>
-                  <th className="pb-3">Alias</th>
+                  <th className="pb-3">Public Name</th>
                   <th className="pb-3">Selected Provider</th>
                   <th className="pb-3">Selected Model</th>
                   <th className="pb-3">Status</th>
@@ -1392,7 +1461,7 @@ function ProvidersTab({ config, providerHealth, discoveredModels, apiCall, fetch
 }
 
 // ----------------------------------------------------
-// MODELS & PROFILES TAB
+// MODEL PROFILES TAB
 // ----------------------------------------------------
 const CAP_LABELS = {
   general: 'General Capabilities',
@@ -1654,162 +1723,576 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
 }
 
 // ----------------------------------------------------
-// ALIASES TAB
+// UNIFIED ROUTES TAB
 // ----------------------------------------------------
-function AliasesTab({ config, discoveredModels, apiCall, fetchConfig, toastSuccess }: any) {
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [aliasName, setAliasName] = useState('');
-  const [targetType, setTargetType] = useState('route'); // route | direct
-  const [targetRoute, setTargetRoute] = useState('');
-  const [directProvider, setDirectProvider] = useState('');
-  const [directModel, setDirectModel] = useState('');
+function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchConfig, toastSuccess }: any) {
+  const [wizardStep, setWizardStep] = useState(0);
+  const [showUnassigned, setShowUnassigned] = useState(false);
+  
+  // Wizard state
+  const [formName, setFormName] = useState('');
+  const [formDescription, setFormDescription] = useState('');
+  const [formMode, setFormMode] = useState('single');
+  const [formAliases, setFormAliases] = useState('');
+  
+  // Single Model fields
+  const [singleProvider, setSingleProvider] = useState('');
+  const [singleModel, setSingleModel] = useState('');
+  
+  // Fallback fields
+  const [fbTargets, setFbTargets] = useState<any[]>([{ provider: '', model: '' }]);
+  
+  // Smart fields
+  const [smartCandidates, setSmartCandidates] = useState<any[]>([{ provider: '', model: '' }]);
+  const [smartPolicy, setSmartPolicy] = useState('balanced');
+  const [smartDefaultTarget, setSmartDefaultTarget] = useState('');
+  const [smartConfidence, setSmartConfidence] = useState(0.7);
+  const [smartSession, setSmartSession] = useState(false);
+  const [smartSessionTTL, setSmartSessionTTL] = useState('60m');
+  const [smartMode, setSmartMode] = useState('shadow');
 
-  // Defaults on load
+  const [shadowReports, setShadowReports] = useState<any>({});
+
+  const [filterMode, setFilterMode] = useState('all');
+
   useEffect(() => {
-    const routeKeys = Object.keys(config.routes || {});
-    if (routeKeys.length > 0) setTargetRoute(routeKeys[0]);
-    const provKeys = Object.keys(config.providers || {});
-    if (provKeys.length > 0) setDirectProvider(provKeys[0]);
+    const provs = Object.keys(config.providers || {});
+    if (provs.length > 0) {
+      if (!singleProvider) setSingleProvider(provs[0]);
+      if (fbTargets.length === 1 && !fbTargets[0].provider) setFbTargets([{ provider: provs[0], model: '' }]);
+      if (smartCandidates.length === 1 && !smartCandidates[0].provider) setSmartCandidates([{ provider: provs[0], model: '' }]);
+    }
+    apiCall(`${API_BASE}/smart/reports`).then((data: any) => {
+      setShadowReports(data.reports || {});
+    }).catch(() => {});
   }, [config]);
 
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!aliasName.trim()) return;
+  const unifiedRoutes = buildUnifiedRoutes(config, providerHealth);
+  const unassignedRoutes = Object.entries(config.routes || {}).filter(([rName, r]: any) => {
+    return !Object.values(config.aliases || {}).some((a: any) => a.route === rName);
+  });
+
+  const filteredRoutes = filterMode === 'all' 
+    ? unifiedRoutes 
+    : unifiedRoutes.filter((r: any) => r.mode === filterMode);
+
+  const resetForm = () => {
+    setWizardStep(0);
+    setFormName('');
+    setFormDescription('');
+    setFormMode('single');
+    setFormAliases('');
+    setSingleModel('');
+    setSingleProvider(Object.keys(config.providers || {})[0] || '');
+    setFbTargets([{ provider: Object.keys(config.providers || {})[0] || '', model: '' }]);
+    setSmartCandidates([{ provider: Object.keys(config.providers || {})[0] || '', model: '' }]);
+    setSmartPolicy('balanced');
+    setSmartDefaultTarget('');
+    setSmartConfidence(0.7);
+    setSmartSession(false);
+    setSmartSessionTTL('60m');
+    setSmartMode('shadow');
+  };
+
+  const handleDeleteRoute = async (route: any) => {
+    const msg = route.aliases?.length > 0 
+      ? `Delete route "${route.name}" and its ${route.aliases.length} additional alias(es)?`
+      : `Delete route "${route.name}"?`;
+    if (!confirm(msg)) return;
 
     try {
-      const payload: any = {
-        name: aliasName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '')
-      };
-      if (targetType === 'route') {
-        payload.route = targetRoute;
-      } else {
-        payload.provider = directProvider;
-        payload.model = directModel;
+      // Delete aliases first, then the route
+      const allNames = [route.name, ...(route.aliases || [])];
+      for (const name of allNames) {
+        if (config.aliases?.[name]) {
+          await apiCall(`${API_BASE}/aliases/${name}`, 'DELETE').catch(() => {});
+        }
       }
-
-      await apiCall(`${API_BASE}/aliases`, 'POST', payload);
-      toastSuccess(`Alias "${aliasName}" configured`);
-      setAliasName('');
-      setDirectModel('');
-      setShowAddForm(false);
+      if (route.internalId && config.routes?.[route.internalId]) {
+        await apiCall(`${API_BASE}/routes/${route.internalId}`, 'DELETE').catch(() => {});
+      }
+      toastSuccess(`Route "${route.name}" deleted`);
       fetchConfig();
     } catch (e) {}
   };
 
-  const handleDelete = async (aliasId: string) => {
-    if (!confirm(`Remove alias "${aliasId}"?`)) return;
+  const handleToggleRoute = async (route: any, enabled: boolean) => {
+    if (route.mode === 'smart') {
+      const mode = enabled ? 'shadow' : 'off';
+      try {
+        await apiCall(`${API_BASE}/smart/routes/${route.internalId}/${enabled ? 'enable-shadow' : 'disable'}`, 'POST', {});
+        toastSuccess(`Route "${route.name}" ${enabled ? 'enabled' : 'disabled'}`);
+        fetchConfig();
+      } catch (e) {}
+    } else {
+      // For non-smart routes, toggle via the alias enable state if possible
+      toastSuccess(`Route state updated`);
+    }
+  };
+
+  // Create route wizard
+  const handleCreateRoute = async () => {
+    const safeName = formName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    const extraAliases = formAliases.split(',').map(a => a.trim()).filter(Boolean);
+
     try {
-      await apiCall(`${API_BASE}/aliases/${aliasId}`, 'DELETE');
-      toastSuccess(`Alias removed`);
+      if (formMode === 'single') {
+        // Create as direct alias
+        const payload = {
+          name: safeName,
+          provider: singleProvider,
+          model: singleModel
+        };
+        await apiCall(`${API_BASE}/aliases`, 'POST', payload);
+        // Create additional aliases
+        for (const alias of extraAliases) {
+          if (alias !== safeName) {
+            await apiCall(`${API_BASE}/aliases`, 'POST', {
+              name: alias,
+              provider: singleProvider,
+              model: singleModel
+            }).catch(() => {});
+          }
+        }
+        toastSuccess(`Single Model route "${formName}" created`);
+      } else if (formMode === 'fallback') {
+        // Create route group + alias
+        const routePayload: any = {
+          name: safeName + '-route',
+          strategy: 'fallback',
+          targets: fbTargets.filter(t => t.provider && t.model).map(t => ({ provider: t.provider, model: t.model }))
+        };
+        const routeResult = await apiCall(`${API_BASE}/routes`, 'POST', routePayload);
+        const routeId = routeResult.name || safeName + '-route';
+        
+        await apiCall(`${API_BASE}/aliases`, 'POST', {
+          name: safeName,
+          route: routeId
+        });
+        for (const alias of extraAliases) {
+          if (alias !== safeName) {
+            await apiCall(`${API_BASE}/aliases`, 'POST', { name: alias, route: routeId }).catch(() => {});
+          }
+        }
+        toastSuccess(`Fallback route "${formName}" created`);
+      } else if (formMode === 'smart') {
+        const routePayload: any = {
+          name: safeName + '-smart',
+          strategy: 'smart',
+          candidates: smartCandidates.filter(c => c.provider && c.model),
+          smart: {
+            mode: smartMode,
+            policy: smartPolicy,
+            confidence_threshold: Number(smartConfidence),
+            session_affinity: smartSession ? { enabled: true, ttl: smartSessionTTL } : { enabled: false },
+            low_confidence_target: smartDefaultTarget || undefined
+          }
+        };
+        const routeResult = await apiCall(`${API_BASE}/routes`, 'POST', routePayload);
+        const routeId = routeResult.name || safeName + '-smart';
+        
+        await apiCall(`${API_BASE}/aliases`, 'POST', {
+          name: safeName,
+          route: routeId
+        });
+        for (const alias of extraAliases) {
+          if (alias !== safeName) {
+            await apiCall(`${API_BASE}/aliases`, 'POST', { name: alias, route: routeId }).catch(() => {});
+          }
+        }
+        toastSuccess(`Smart route "${formName}" created in ${smartMode} mode`);
+      }
+      resetForm();
       fetchConfig();
     } catch (e) {}
   };
 
+  // ------ MAIN RENDER ------
   return (
     <div className="space-y-6">
+      {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-        <h3 className="text-lg font-bold">Model & Route Aliases</h3>
+        <div>
+          <h3 className="text-lg font-bold">Public Routes</h3>
+          <p className="text-xs text-zinc-500 mt-1">Configure how clients reach models through public model names.</p>
+        </div>
         <button 
-          onClick={() => setShowAddForm(!showAddForm)}
+          onClick={() => { resetForm(); setWizardStep(1); }}
           className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"
         >
-          {showAddForm ? 'Cancel' : <><Plus className="h-4 w-4" /> Add Alias</>}
+          <Plus className="h-4 w-4" /> Create Route
         </button>
       </div>
 
-      {showAddForm && (
-        <form onSubmit={handleSave} className="glass-panel rounded-2xl border border-zinc-800 p-6 space-y-4 max-w-xl">
-          <h4 className="font-bold text-sm text-zinc-300">Create Mapping Alias</h4>
-          <div>
-            <label className="block text-xs font-semibold text-zinc-400 mb-1">Public Alias Name (e.g. "gpt-4o", "fast")</label>
-            <input type="text" required value={aliasName} onChange={(e) => setAliasName(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
+      {/* Create Route Wizard */}
+      {wizardStep > 0 && (
+        <div className="glass-panel rounded-2xl border border-zinc-800 p-6 space-y-6">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+            <h4 className="font-bold text-sm text-zinc-300">
+              {wizardStep === 1 && 'Step 1: Public Identity'}
+              {wizardStep === 2 && 'Step 2: Choose Routing Behavior'}
+              {wizardStep === 3 && `Step 3: Configure ${formMode === 'single' ? 'Single Model' : formMode === 'fallback' ? 'Fallback' : 'Smart'} Settings`}
+              {wizardStep === 4 && 'Step 4: Review & Save'}
+            </h4>
+            <div className="text-xs text-zinc-500">Step {wizardStep} of 4</div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-zinc-400 mb-2">Target Type</label>
-            <div className="flex gap-4 text-xs">
-              <label className="flex items-center gap-2">
-                <input type="radio" name="targetType" checked={targetType === 'route'} onChange={() => setTargetType('route')} />
-                Point to Route Group
-              </label>
-              <label className="flex items-center gap-2">
-                <input type="radio" name="targetType" checked={targetType === 'direct'} onChange={() => setTargetType('direct')} />
-                Point directly to Provider:Model
-              </label>
-            </div>
+          {/* Progress */}
+          <div className="w-full bg-zinc-800 h-1 rounded-full overflow-hidden">
+            <div className="bg-indigo-600 h-full transition-all duration-300" style={{ width: `${(wizardStep / 4) * 100}%` }}></div>
           </div>
 
-          {targetType === 'route' ? (
-            <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-1">Select Route</label>
-              <select value={targetRoute} onChange={(e) => setTargetRoute(e.target.value)} className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100">
-                {Object.keys(config.routes || {}).map(k => <option key={k} value={k}>{k}</option>)}
-              </select>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-4">
+          {/* Step 1: Public Identity */}
+          {wizardStep === 1 && (
+            <div className="space-y-4 max-w-lg">
               <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1">Provider</label>
-                <select value={directProvider} onChange={(e) => setDirectProvider(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100">
-                  {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
-                </select>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1">Public model name</label>
+                <input type="text" required value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="e.g. coding" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono" />
+                <p className="text-[10px] text-zinc-500 mt-1">Applications send this name in the <code className="font-mono text-zinc-400">model</code> field.</p>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-zinc-400 mb-1">Model ID</label>
-                <input type="text" required value={directModel} onChange={(e) => setDirectModel(e.target.value)} placeholder="gpt-4o" list={`alias-models`} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
-                <datalist id="alias-models">
-                  {availableModels(discoveredModels, directProvider, config).map((m: string) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1">Description — optional</label>
+                <input type="text" value={formDescription} onChange={(e) => setFormDescription(e.target.value)} placeholder="Primary model used by coding agents" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1">Additional aliases — optional</label>
+                <input type="text" value={formAliases} onChange={(e) => setFormAliases(e.target.value)} placeholder="code, developer" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
+                <p className="text-[10px] text-zinc-500 mt-1">Comma-separated. All names resolve to the same route.</p>
               </div>
             </div>
           )}
 
-          <button type="submit" className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-semibold">Save Alias</button>
-        </form>
+          {/* Step 2: Mode Selection */}
+          {wizardStep === 2 && (
+            <div>
+              <p className="text-xs text-zinc-400 mb-4">How should TermRouter decide where requests go?</p>
+              <div className="grid grid-cols-3 gap-4">
+                <button 
+                  onClick={() => setFormMode('single')}
+                  className={`p-5 rounded-2xl border text-left transition-all ${formMode === 'single' ? 'border-indigo-500 bg-indigo-500/10 shadow-lg shadow-indigo-500/10' : 'border-zinc-800 bg-zinc-900/30 hover:border-zinc-700'}`}
+                >
+                  <h5 className="font-bold text-sm text-zinc-100 mb-2">Single Model</h5>
+                  <p className="text-xs text-zinc-400 mb-3">Always send requests to one provider and model.</p>
+                  <div className="text-[10px] text-zinc-500 space-y-1">
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Simple setup</div>
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Local models</div>
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Predictable behavior</div>
+                  </div>
+                </button>
+                <button 
+                  onClick={() => setFormMode('fallback')}
+                  className={`p-5 rounded-2xl border text-left transition-all ${formMode === 'fallback' ? 'border-indigo-500 bg-indigo-500/10 shadow-lg shadow-indigo-500/10' : 'border-zinc-800 bg-zinc-900/30 hover:border-zinc-700'}`}
+                >
+                  <h5 className="font-bold text-sm text-zinc-100 mb-2">Fallback</h5>
+                  <p className="text-xs text-zinc-400 mb-3">Try targets in priority order on eligible failures.</p>
+                  <div className="text-[10px] text-zinc-500 space-y-1">
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Higher availability</div>
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Rate-limit recovery</div>
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Primary + backup</div>
+                  </div>
+                </button>
+                <button 
+                  onClick={() => setFormMode('smart')}
+                  className={`p-5 rounded-2xl border text-left transition-all ${formMode === 'smart' ? 'border-indigo-500 bg-indigo-500/10 shadow-lg shadow-indigo-500/10' : 'border-zinc-800 bg-zinc-900/30 hover:border-zinc-700'}`}
+                >
+                  <h5 className="font-bold text-sm text-zinc-100 mb-2">Smart</h5>
+                  <p className="text-xs text-zinc-400 mb-3">Analyze requests and select the best candidate.</p>
+                  <div className="text-[10px] text-zinc-500 space-y-1">
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Mixed workloads</div>
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Cost-quality balance</div>
+                    <div className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-emerald-500" /> Task specialization</div>
+                  </div>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Mode-specific config */}
+          {wizardStep === 3 && formMode === 'single' && (
+            <div className="space-y-4 max-w-lg">
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1">Provider</label>
+                <select value={singleProvider} onChange={(e) => setSingleProvider(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100">
+                  {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-zinc-400 mb-1">Model</label>
+                <input type="text" required value={singleModel} onChange={(e) => setSingleModel(e.target.value)} placeholder="gpt-4o-mini" list="route-single-models" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono" />
+                <datalist id="route-single-models">
+                  {availableModels(discoveredModels, singleProvider, config).map((m: string) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </div>
+              <div className="bg-indigo-500/5 border border-indigo-500/10 rounded-xl p-3 text-xs text-indigo-300">
+                Requests for <code className="font-mono font-bold">{formName || '...'}</code> always go to <code className="font-mono font-bold">{singleProvider || '...'} / {singleModel || '...'}</code>.
+              </div>
+            </div>
+          )}
+
+          {wizardStep === 3 && formMode === 'fallback' && (
+            <div className="space-y-4 max-w-2xl">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Ordered Targets</span>
+                <button type="button" onClick={() => setFbTargets([...fbTargets, { provider: Object.keys(config.providers || {})[0] || '', model: '' }])} className="text-xs text-indigo-400 flex items-center gap-1 hover:underline">
+                  <Plus className="h-3.5 w-3.5" /> Add Target
+                </button>
+              </div>
+              {fbTargets.map((t, idx) => (
+                <div key={idx} className="flex gap-3 items-center">
+                  <span className="font-mono text-xs text-zinc-500 w-5">{idx + 1}.</span>
+                  <select value={t.provider} onChange={(e) => {
+                    const copy = [...fbTargets]; copy[idx].provider = e.target.value; setFbTargets(copy);
+                  }} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1">
+                    {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
+                  </select>
+                  <input type="text" required placeholder="Model ID" value={t.model} onChange={(e) => {
+                    const copy = [...fbTargets]; copy[idx].model = e.target.value; setFbTargets(copy);
+                  }} list={`fb-models-${idx}`} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1" />
+                  <datalist id={`fb-models-${idx}`}>
+                    {availableModels(discoveredModels, t.provider, config).map((m: string) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                  {fbTargets.length > 1 && (
+                    <button type="button" onClick={() => setFbTargets(fbTargets.filter((_, i) => i !== idx))} className="text-rose-400 hover:text-rose-200 p-2">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {wizardStep === 3 && formMode === 'smart' && (
+            <div className="space-y-6 max-w-2xl">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-zinc-400 uppercase tracking-wider">Candidate Pool</span>
+                  <button type="button" onClick={() => setSmartCandidates([...smartCandidates, { provider: Object.keys(config.providers || {})[0] || '', model: '' }])} className="text-xs text-indigo-400 flex items-center gap-1 hover:underline">
+                    <Plus className="h-3.5 w-3.5" /> Add Candidate
+                  </button>
+                </div>
+                {smartCandidates.map((c, idx) => (
+                  <div key={idx} className="flex gap-3 items-center">
+                    <select value={c.provider} onChange={(e) => {
+                      const copy = [...smartCandidates]; copy[idx].provider = e.target.value; setSmartCandidates(copy);
+                    }} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1">
+                      {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
+                    </select>
+                    <input type="text" required placeholder="Model ID" value={c.model} onChange={(e) => {
+                      const copy = [...smartCandidates]; copy[idx].model = e.target.value; setSmartCandidates(copy);
+                    }} list={`sc-models-${idx}`} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1" />
+                    <datalist id={`sc-models-${idx}`}>
+                      {availableModels(discoveredModels, c.provider, config).map((m: string) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                    {smartCandidates.length > 1 && (
+                      <button type="button" onClick={() => setSmartCandidates(smartCandidates.filter((_, i) => i !== idx))} className="text-rose-400 hover:text-rose-200 p-2">
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div>
+                  <label className="block text-zinc-400 mb-1">Policy Preset</label>
+                  <select value={smartPolicy} onChange={(e) => setSmartPolicy(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-zinc-100">
+                    <option value="balanced">Balanced</option>
+                    <option value="quality">Quality-oriented</option>
+                    <option value="economy">Economy-oriented</option>
+                    <option value="fast">Latency-oriented</option>
+                    <option value="private">Privacy-oriented</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1">Default target (fallback)</label>
+                  <input type="text" value={smartDefaultTarget} onChange={(e) => setSmartDefaultTarget(e.target.value)} placeholder="provider:model" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-zinc-100 font-mono" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-xs">
+                <div>
+                  <label className="block text-zinc-400 mb-1">Operating Mode</label>
+                  <div className="flex gap-2">
+                    <button onClick={() => setSmartMode('shadow')} className={`flex-1 px-3 py-2 rounded-lg border text-xs font-semibold transition-colors ${smartMode === 'shadow' ? 'bg-amber-600 text-white border-amber-500' : 'bg-zinc-900 text-zinc-400 border-zinc-800'}`}>Shadow</button>
+                    <button onClick={() => setSmartMode('live')} className={`flex-1 px-3 py-2 rounded-lg border text-xs font-semibold transition-colors ${smartMode === 'live' ? 'bg-emerald-600 text-white border-emerald-500' : 'bg-zinc-900 text-zinc-400 border-zinc-800'}`}>Live</button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-zinc-400 mb-1">Confidence: <span className="text-indigo-400 font-bold">{smartConfidence}</span></label>
+                  <input type="range" min="0.1" max="1.0" step="0.05" value={smartConfidence} onChange={(e) => setSmartConfidence(Number(e.target.value))} className="w-full bg-zinc-800 rounded-lg accent-indigo-500" />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-xs border border-zinc-800 bg-zinc-900/20 p-3 rounded-lg cursor-pointer">
+                <input type="checkbox" checked={smartSession} onChange={(e) => setSmartSession(e.target.checked)} className="rounded bg-zinc-900 border-zinc-800" />
+                <span>Enable session affinity <span className="text-zinc-500">(stick to same model per session)</span></span>
+              </label>
+              {smartSession && (
+                <div className="max-w-xs">
+                  <label className="block text-xs text-zinc-400 mb-1">Session TTL</label>
+                  <input type="text" value={smartSessionTTL} onChange={(e) => setSmartSessionTTL(e.target.value)} placeholder="60m" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-sm text-zinc-100 font-mono" />
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 4: Review */}
+          {wizardStep === 4 && (
+            <div className="space-y-4 max-w-lg">
+              <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-4 space-y-3 text-sm">
+                <div className="flex justify-between"><span className="text-zinc-400">Public name:</span> <span className="font-mono font-bold text-zinc-100">{formName || '...'}</span></div>
+                {formAliases && <div className="flex justify-between"><span className="text-zinc-400">Additional aliases:</span> <span className="font-mono text-zinc-300">{formAliases}</span></div>}
+                <div className="flex justify-between"><span className="text-zinc-400">Mode:</span> <span className="font-bold text-indigo-400 capitalize">{formMode}</span></div>
+                
+                {formMode === 'single' && (
+                  <div className="flex justify-between"><span className="text-zinc-400">Target:</span> <span className="font-mono text-zinc-300">{singleProvider} / {singleModel}</span></div>
+                )}
+                {formMode === 'fallback' && (
+                  <div><span className="text-zinc-400 block mb-1">Targets:</span>
+                    {fbTargets.filter(t => t.provider && t.model).map((t, i) => (
+                      <div key={i} className="font-mono text-zinc-300 text-xs ml-2">{i + 1}. {t.provider} / {t.model}</div>
+                    ))}
+                  </div>
+                )}
+                {formMode === 'smart' && (
+                  <div><span className="text-zinc-400 block mb-1">Candidates ({smartCandidates.filter(c => c.provider && c.model).length}):</span>
+                    {smartCandidates.filter(c => c.provider && c.model).map((c, i) => (
+                      <div key={i} className="font-mono text-zinc-300 text-xs ml-2">{c.provider} / {c.model}</div>
+                    ))}
+                    <div className="mt-2 text-xs text-zinc-400">Policy: <span className="font-semibold text-indigo-400 capitalize">{smartPolicy}</span> | Mode: <span className="font-semibold text-amber-400 uppercase">{smartMode}</span></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Wizard nav buttons */}
+          <div className="flex justify-between border-t border-zinc-800 pt-4">
+            <button 
+              onClick={() => { if (wizardStep === 1) { setWizardStep(0); } else { setWizardStep(wizardStep - 1); } }}
+              className="rounded-lg border border-zinc-800 hover:bg-zinc-900 px-4 py-2 text-sm"
+            >
+              {wizardStep === 1 ? 'Cancel' : 'Back'}
+            </button>
+            {wizardStep < 4 ? (
+              <button 
+                onClick={() => setWizardStep(wizardStep + 1)}
+                disabled={wizardStep === 1 && !formName.trim()}
+                className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2 text-sm font-semibold disabled:opacity-40"
+              >
+                Next
+              </button>
+            ) : (
+              <button 
+                onClick={handleCreateRoute}
+                className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-5 py-2 text-sm font-semibold"
+              >
+                Save Route
+              </button>
+            )}
+          </div>
+        </div>
       )}
 
-      {/* List Aliases */}
-      <div className="glass-panel rounded-2xl border border-zinc-800 shadow-lg p-6">
+      {/* Filter tabs */}
+      <div className="flex items-center gap-2 text-xs">
+        {['all', 'single', 'fallback', 'smart'].map(m => (
+          <button 
+            key={m} 
+            onClick={() => setFilterMode(m)}
+            className={`px-3 py-1.5 rounded-lg border font-semibold transition-colors ${filterMode === m ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'}`}
+          >
+            {m === 'all' ? 'All' : m === 'single' ? 'Single Model' : m.charAt(0).toUpperCase() + m.slice(1)}
+          </button>
+        ))}
+      </div>
+
+      {/* Route table */}
+      <div className="glass-panel rounded-2xl border border-zinc-800 shadow-lg overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-zinc-800 text-zinc-400 font-semibold uppercase tracking-wider">
-                <th className="pb-3">Alias</th>
-                <th className="pb-3">Target Routing Path</th>
-                <th className="pb-3">Route Type</th>
-                <th className="pb-3 text-right">Actions</th>
+              <tr className="border-b border-zinc-800 text-zinc-400 font-semibold uppercase tracking-wider bg-zinc-900/30">
+                <th className="px-4 py-3">Public Name</th>
+                <th className="px-4 py-3">Mode</th>
+                <th className="px-4 py-3">Destination / Candidates</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Health</th>
+                <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-zinc-850">
-              {Object.keys(config.aliases || {}).length === 0 ? (
+            <tbody className="divide-y divide-zinc-800/50">
+              {filteredRoutes.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-8 text-center text-zinc-500">No aliases configured. Click "Add Alias" to map client names.</td>
+                  <td colSpan={6} className="px-4 py-12 text-center text-zinc-500">
+                    <div className="flex flex-col items-center gap-2">
+                      <Sliders className="h-8 w-8 text-zinc-600" />
+                      <p className="font-medium">No public routes yet</p>
+                      <p className="text-[10px] text-zinc-600">Create a public model name and choose how TermRouter should serve it.</p>
+                    </div>
+                  </td>
                 </tr>
               ) : (
-                Object.entries(config.aliases || {}).map(([name, a]: any) => (
-                  <tr key={name} className="hover:bg-zinc-900/30">
-                    <td className="py-4 font-mono font-bold text-zinc-200">{name}</td>
-                    <td className="py-4 font-mono text-zinc-300">
-                      {a.route ? (
-                        <span className="text-indigo-400 font-semibold">routes/{a.route}</span>
-                      ) : (
-                        `providers/${a.provider} → ${a.model}`
+                filteredRoutes.map((route: any) => (
+                  <tr key={route.id} className="hover:bg-zinc-900/30 transition-colors">
+                    <td className="px-4 py-4">
+                      <div className="font-bold text-zinc-100 font-mono">{route.name}</div>
+                      {route.aliases?.length > 0 && (
+                        <div className="text-[10px] text-zinc-500 mt-0.5">
+                          +{route.aliases.length} alias(es)
+                        </div>
                       )}
                     </td>
-                    <td className="py-4">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${a.route ? 'bg-indigo-950 text-indigo-400 border border-indigo-900' : 'bg-zinc-900 text-zinc-400 border border-zinc-800'}`}>
-                        {a.route ? 'ROUTE GROUP' : 'DIRECT TARGET'}
-                      </span>
+                    <td className="px-4 py-4">
+                      {route.mode === 'single' && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950 text-indigo-400 border border-indigo-900">Single Model</span>
+                      )}
+                      {route.mode === 'fallback' && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-950 text-amber-400 border border-amber-900">Fallback</span>
+                      )}
+                      {route.mode === 'smart' && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-950 text-emerald-400 border border-emerald-900">Smart</span>
+                      )}
                     </td>
-                    <td className="py-4 text-right">
-                      <button 
-                        onClick={() => handleDelete(name)}
-                        className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 p-2 rounded-lg transition-colors inline-flex items-center"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+                    <td className="px-4 py-4 text-zinc-300 font-mono text-[11px] max-w-[250px] truncate">
+                      {route.summary}
+                    </td>
+                    <td className="px-4 py-4">
+                      {route.mode === 'smart' ? (
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${route.status === 'live' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : route.status === 'shadow' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}>
+                          {(route.status || 'off').toUpperCase()}
+                        </span>
+                      ) : (
+                        <span className={`h-2 w-2 rounded-full inline-block ${route.status === 'healthy' ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
+                      )}
+                    </td>
+                    <td className="px-4 py-4 text-zinc-400 text-[11px]">{route.health}</td>
+                    <td className="px-4 py-4 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        {route.mode === 'smart' && (
+                          <>
+                            <button 
+                              onClick={() => handleToggleRoute(route, route.status === 'off')}
+                              className={`px-2 py-1 rounded text-[10px] font-semibold border transition-colors ${route.status === 'live' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : route.status === 'shadow' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-zinc-800 text-zinc-400 border-zinc-700'}`}
+                            >
+                              {route.status === 'live' ? 'Live' : route.status === 'shadow' ? 'Shadow' : 'Disabled'}
+                            </button>
+                          </>
+                        )}
+                        <button 
+                          onClick={() => handleDeleteRoute(route)}
+                          className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 p-1.5 rounded-lg transition-colors"
+                          title="Delete"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -1818,474 +2301,47 @@ function AliasesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucce
           </table>
         </div>
       </div>
-    </div>
-  );
-}
 
-// ----------------------------------------------------
-// ROUTES TAB
-// ----------------------------------------------------
-function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchConfig, toastSuccess }: any) {
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [routeName, setRouteName] = useState('');
-  const [strategy, setStrategy] = useState('fallback'); // direct | fallback
-  
-  // Targets list state
-  const [targets, setTargets] = useState<any[]>([{ provider: '', model: '', timeout: '' }]);
-
-  useEffect(() => {
-    const provs = Object.keys(config.providers || {});
-    if (provs.length > 0 && targets.length === 1 && !targets[0].provider) {
-      setTargets([{ provider: provs[0], model: '', timeout: '' }]);
-    }
-  }, [config]);
-
-  const addTargetRow = () => {
-    const provs = Object.keys(config.providers || {});
-    setTargets([...targets, { provider: provs[0] || '', model: '', timeout: '' }]);
-  };
-
-  const removeTargetRow = (idx: number) => {
-    setTargets(targets.filter((_, i) => i !== idx));
-  };
-
-  const updateTarget = (idx: number, field: string, val: any) => {
-    const copy = [...targets];
-    copy[idx][field] = val;
-    setTargets(copy);
-  };
-
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!routeName.trim() || targets.length === 0) return;
-
-    try {
-      const formattedTargets = targets.map(t => {
-        const item: any = { provider: t.provider, model: t.model };
-        if (t.timeout) item.timeout = t.timeout;
-        return item;
-      });
-
-      const payload: any = {
-        name: routeName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, ''),
-        strategy,
-        targets: formattedTargets
-      };
-
-      await apiCall(`${API_BASE}/routes`, 'POST', payload);
-      toastSuccess(`Route group "${routeName}" configured`);
-      setRouteName('');
-      setTargets([{ provider: Object.keys(config.providers || {})[0] || '', model: '', timeout: '' }]);
-      setShowAddForm(false);
-      fetchConfig();
-    } catch (e) {}
-  };
-
-  const handleDelete = async (routeId: string) => {
-    if (!confirm(`Delete route group "${routeId}"?`)) return;
-    try {
-      await apiCall(`${API_BASE}/routes/${routeId}`, 'DELETE');
-      toastSuccess(`Route removed`);
-      fetchConfig();
-    } catch (e) {}
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-        <h3 className="text-lg font-bold">Route Target Groups</h3>
-        <button 
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"
-        >
-          {showAddForm ? 'Cancel' : <><Plus className="h-4 w-4" /> Create Route Group</>}
-        </button>
-      </div>
-
-      {showAddForm && (
-        <form onSubmit={handleSave} className="glass-panel rounded-2xl border border-zinc-800 p-6 space-y-4 max-w-2xl">
-          <h4 className="font-bold text-sm text-zinc-300">Create Target Group</h4>
-          
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-1">Route Name ID</label>
-              <input type="text" required value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="fast-fallback" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-1">Routing Strategy</label>
-              <select value={strategy} onChange={(e) => setStrategy(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100">
-                <option value="fallback">Ordered Fallback (Try targets in order on failure)</option>
-                <option value="direct">Direct Single Target (Always route to first candidate)</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between border-b border-zinc-850 pb-2">
-              <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider">Targets List (Priority Order)</label>
-              <button type="button" onClick={addTargetRow} className="text-xs text-indigo-400 flex items-center gap-1 hover:underline">
-                <Plus className="h-3.5 w-3.5" /> Add Target Target
-              </button>
-            </div>
-
-            {targets.map((t, idx) => (
-              <div key={idx} className="flex gap-3 items-center">
-                <span className="font-mono text-xs text-zinc-500 w-4">{idx + 1}.</span>
-                <select value={t.provider} onChange={(e) => updateTarget(idx, 'provider', e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1">
-                  {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
-                </select>
-                <input type="text" required placeholder="Model ID (e.g. gpt-4o-mini)" value={t.model} onChange={(e) => updateTarget(idx, 'model', e.target.value)} list={`target-models-${idx}`} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1" />
-                <datalist id={`target-models-${idx}`}>
-                  {availableModels(discoveredModels, t.provider, config).map((m: string) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-                <input type="text" placeholder="Timeout (e.g. 30s)" value={t.timeout} onChange={(e) => updateTarget(idx, 'timeout', e.target.value)} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 w-24 font-mono" />
-                <button type="button" disabled={targets.length === 1} onClick={() => removeTargetRow(idx)} className="text-rose-400 hover:text-rose-200 disabled:opacity-40 p-2"><Trash2 className="h-4 w-4" /></button>
-              </div>
-            ))}
-          </div>
-
-          <button type="submit" className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-semibold">Save Route Group</button>
-        </form>
-      )}
-
-      {/* List Routes */}
-      <div className="grid grid-cols-2 gap-6">
-        {Object.entries(config.routes || {}).map(([rName, r]: any) => {
-          if (r.strategy === 'smart') return null; // Smart routes in another tab
-          return (
-            <div key={rName} className="glass-panel rounded-2xl border border-zinc-800 p-5 space-y-4 flex flex-col justify-between shadow-lg">
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="font-bold text-base text-zinc-205">{rName}</h4>
-                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-950 text-indigo-400 border border-indigo-900 uppercase">
-                    {r.strategy}
-                  </span>
-                </div>
-
-                <div className="space-y-2">
-                  <span className="text-[10px] text-zinc-500 font-bold uppercase">Targets:</span>
-                  <div className="space-y-2">
-                    {r.targets?.map((t: any, idx: number) => {
-                      const pHealth = providerHealth[t.provider] || {};
-                      const isUnhealthy = pHealth.circuit === 'open';
-                      return (
-                        <div key={idx} className="flex items-center justify-between bg-zinc-900/40 border border-zinc-850 p-2.5 rounded-lg text-xs font-mono">
-                          <div className="flex items-center gap-2">
-                            <span className="text-zinc-500 font-semibold">{idx + 1}.</span>
-                            <span className="font-bold text-zinc-300">{t.provider}</span>
-                            <span className="text-zinc-400">/</span>
-                            <span className="text-zinc-400">{t.model}</span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            {t.timeout && <span className="text-[10px] text-zinc-500">t={t.timeout}</span>}
-                            <span className={`h-2 w-2 rounded-full ${isUnhealthy ? 'bg-rose-500' : 'bg-emerald-500'}`}></span>
-                          </div>
-                        </div>
-                      );
-                    })}
+      {/* Unassigned routes section */}
+      {unassignedRoutes.length > 0 && (
+        <div className="glass-panel rounded-2xl border border-zinc-800/60 p-5 space-y-3">
+          <button 
+            onClick={() => setShowUnassigned(!showUnassigned)} 
+            className="flex items-center justify-between w-full text-left"
+          >
+            <h4 className="text-sm font-bold text-zinc-400">Unassigned Internal Routes ({unassignedRoutes.length})</h4>
+            <span className="text-xs text-zinc-500">{showUnassigned ? 'Hide' : 'Show'}</span>
+          </button>
+          {showUnassigned && (
+            <div className="space-y-2">
+              <p className="text-xs text-zinc-500">These routes exist but clients cannot request them through a public model name.</p>
+              {unassignedRoutes.map(([rName, r]: any) => (
+                <div key={rName} className="flex items-center justify-between bg-zinc-900/30 border border-zinc-800 rounded-lg p-3">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-sm text-zinc-300">{rName}</span>
+                    <span className="text-[10px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded font-mono">{r.strategy}</span>
                   </div>
+                  <button 
+                    onClick={async () => {
+                      const name = prompt('Assign a public model name:');
+                      if (name) {
+                        try {
+                          await apiCall(`${API_BASE}/aliases`, 'POST', { name: name.trim(), route: rName });
+                          toastSuccess(`Alias "${name}" created for route "${rName}"`);
+                          fetchConfig();
+                        } catch (e) {}
+                      }
+                    }}
+                    className="bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 px-3 py-1 rounded-lg text-xs font-semibold"
+                  >
+                    Assign public name
+                  </button>
                 </div>
-              </div>
-
-              <div className="border-t border-zinc-850 pt-3 flex justify-end">
-                <button 
-                  onClick={() => handleDelete(rName)}
-                  className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1.5 rounded-lg text-xs flex items-center gap-1 transition-colors"
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> Remove Group
-                </button>
-              </div>
+              ))}
             </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ----------------------------------------------------
-// SMART ROUTES TAB
-// ----------------------------------------------------
-function SmartRoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchConfig, toastSuccess }: any) {
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [routeName, setRouteName] = useState('');
-  const [policy, setPolicy] = useState('balanced');
-  const [confidenceThreshold, setConfidenceThreshold] = useState(0.7);
-  const [lowConfidenceTarget, setLowConfidenceTarget] = useState('');
-  const [candidates, setCandidates] = useState<any[]>([{ provider: '', model: '' }]);
-  const [shadowReports, setShadowReports] = useState<any>({});
-  const [sessionAffinity, setSessionAffinity] = useState(false);
-  const [sessionTTL, setSessionTTL] = useState('15m');
-
-  useEffect(() => {
-    const provs = Object.keys(config.providers || {});
-    if (provs.length > 0 && candidates.length === 1 && !candidates[0].provider) {
-      setCandidates([{ provider: provs[0], model: '' }]);
-    }
-    // Fetch reports
-    apiCall(`${API_BASE}/smart/reports`).then((data: any) => {
-      setShadowReports(data.reports || {});
-    }).catch(() => {});
-  }, [config]);
-
-  const addCandidateRow = () => {
-    const provs = Object.keys(config.providers || {});
-    setCandidates([...candidates, { provider: provs[0] || '', model: '' }]);
-  };
-
-  const removeCandidateRow = (idx: number) => {
-    setCandidates(candidates.filter((_, i) => i !== idx));
-  };
-
-  const updateCandidate = (idx: number, field: string, val: any) => {
-    const copy = [...candidates];
-    copy[idx][field] = val;
-    setCandidates(copy);
-  };
-
-  const handleSave = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!routeName.trim() || candidates.length === 0) return;
-
-    try {
-      const finalCandidates = candidates.map(c => ({ provider: c.provider, model: c.model }));
-      const payload = {
-        name: routeName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, ''),
-        strategy: 'smart',
-        candidates: finalCandidates,
-        smart: {
-          mode: 'shadow', // default to shadow first
-          policy,
-          confidence_threshold: Number(confidenceThreshold),
-          low_confidence_target: lowConfidenceTarget || undefined,
-          session_affinity: {
-            enabled: sessionAffinity,
-            ttl: sessionTTL
-          }
-        }
-      };
-
-      await apiCall(`${API_BASE}/routes`, 'POST', payload);
-      toastSuccess(`Smart Route "${routeName}" configured in shadow mode`);
-      setRouteName('');
-      setCandidates([{ provider: Object.keys(config.providers || {})[0] || '', model: '' }]);
-      setShowAddForm(false);
-      fetchConfig();
-    } catch (e) {}
-  };
-
-  const handleSetMode = async (routeId: string, mode: string) => {
-    const endPoint = mode === 'live' ? 'enable-live' : (mode === 'shadow' ? 'enable-shadow' : 'disable');
-    
-    // Explicit warning for live activation
-    if (mode === 'live' && !confirm('Are you sure you want to enable Live Routing? TermRouter will dynamically evaluate prompting tasks to route requests.')) {
-      return;
-    }
-
-    try {
-      const payload = mode === 'live' ? { confirm: true } : {};
-      await apiCall(`${API_BASE}/smart/routes/${routeId}/${endPoint}`, 'POST', payload);
-      toastSuccess(`Smart Route "${routeId}" set to ${mode} mode`);
-      fetchConfig();
-    } catch (e) {}
-  };
-
-  const handleDelete = async (routeId: string) => {
-    if (!confirm(`Delete Smart Route group "${routeId}"?`)) return;
-    try {
-      await apiCall(`${API_BASE}/routes/${routeId}`, 'DELETE');
-      toastSuccess(`Route group removed`);
-      fetchConfig();
-    } catch (e) {}
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
-        <div>
-          <h3 className="text-lg font-bold">Smart Routes Console</h3>
-          <p className="text-xs text-zinc-500 mt-1">Deploy task-aware routing, run shadow evaluations, and configure quality/cost policies.</p>
+          )}
         </div>
-        <button 
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-semibold flex items-center gap-1.5 transition-colors"
-        >
-          {showAddForm ? 'Cancel' : <><Plus className="h-4 w-4" /> Create Smart Route</>}
-        </button>
-      </div>
-
-      {showAddForm && (
-        <form onSubmit={handleSave} className="glass-panel rounded-2xl border border-zinc-800 p-6 space-y-6 max-w-2xl">
-          <h4 className="font-bold text-sm text-zinc-300">Configure Smart Route</h4>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-1">Route Name ID</label>
-              <input type="text" required value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="smart-router" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
-            </div>
-            <div>
-              <label className="block text-xs font-semibold text-zinc-400 mb-1">Policy Preset</label>
-              <select value={policy} onChange={(e) => setPolicy(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100">
-                <option value="balanced">Balanced (Trade-off cost, quality, latency)</option>
-                <option value="quality">Quality-oriented (Prefers highest capability model)</option>
-                <option value="economy">Economy-oriented (Prefers lowest cost suitable model)</option>
-                <option value="fast">Latency-oriented (Prefers fastest response)</option>
-                <option value="private">Privacy-oriented (Prefers local execution)</option>
-              </select>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 gap-4 text-xs">
-            <div>
-              <label className="block text-zinc-400 mb-1">Confidence Threshold: <span className="text-indigo-400 font-bold">{confidenceThreshold}</span></label>
-              <input type="range" min="0.1" max="1.0" step="0.05" value={confidenceThreshold} onChange={(e) => setConfidenceThreshold(Number(e.target.value))} className="w-full bg-zinc-800 rounded-lg accent-indigo-500" />
-            </div>
-            <div>
-              <label className="block text-zinc-400 mb-1">Low-Confidence Default Target (e.g. provider:model)</label>
-              <input type="text" value={lowConfidenceTarget} onChange={(e) => setLowConfidenceTarget(e.target.value)} placeholder="openai:gpt-4o" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono" />
-            </div>
-          </div>
-
-          <div className="border-t border-zinc-800 pt-4 grid grid-cols-2 gap-4 text-xs">
-            <label className="flex items-center gap-2 border border-zinc-850 bg-zinc-900/20 p-3 rounded-lg cursor-pointer">
-              <input type="checkbox" checked={sessionAffinity} onChange={(e) => setSessionAffinity(e.target.checked)} className="rounded bg-zinc-900 border-zinc-800" />
-              Enable Session Affinity (Stick to same model per session)
-            </label>
-            {sessionAffinity && (
-              <div>
-                <label className="block text-zinc-400 mb-1">Session Expiry TTL</label>
-                <input type="text" value={sessionTTL} onChange={(e) => setSessionTTL(e.target.value)} placeholder="15m" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-zinc-100 font-mono" />
-              </div>
-            )}
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center justify-between border-b border-zinc-850 pb-2">
-              <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider">Candidate Models</label>
-              <button type="button" onClick={addCandidateRow} className="text-xs text-indigo-400 flex items-center gap-1 hover:underline">
-                <Plus className="h-3.5 w-3.5" /> Add Candidate
-              </button>
-            </div>
-
-            {candidates.map((c, idx) => (
-              <div key={idx} className="flex gap-3 items-center">
-                <span className="font-mono text-xs text-zinc-500 w-4">{idx + 1}.</span>
-                <select value={c.provider} onChange={(e) => updateCandidate(idx, 'provider', e.target.value)} className="bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1">
-                  {Object.keys(config.providers || {}).map(k => <option key={k} value={k}>{k}</option>)}
-                </select>
-                <input type="text" required placeholder="Model ID (e.g. gpt-4o-mini)" value={c.model} onChange={(e) => updateCandidate(idx, 'model', e.target.value)} list={`candidate-models-${idx}`} className="bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5 text-xs text-zinc-100 flex-1 font-mono" />
-                <datalist id={`candidate-models-${idx}`}>
-                  {availableModels(discoveredModels, c.provider, config).map((m: string) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-                <button type="button" disabled={candidates.length === 1} onClick={() => removeCandidateRow(idx)} className="text-rose-400 hover:text-rose-200 disabled:opacity-40 p-2"><Trash2 className="h-4 w-4" /></button>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-indigo-500/5 border border-indigo-500/10 text-[10px] text-indigo-400 rounded-xl p-3 leading-relaxed">
-            <strong>Shadow Mode Default:</strong> Smart routes are created in shadow mode by default. They evaluate incoming client traffic, rank models, and compile decision reports on actual traffic without changing the model that receives the request. Move to live mode after reviewing reports.
-          </div>
-
-          <button type="submit" className="rounded-xl bg-indigo-600 hover:bg-indigo-500 px-4 py-2 text-sm font-semibold">Save Smart Route</button>
-        </form>
       )}
-
-      {/* List Smart Routes */}
-      <div className="space-y-6">
-        {Object.entries(config.routes || {}).map(([rName, r]: any) => {
-          if (r.strategy !== 'smart') return null;
-          const sConf = r.smart || {};
-          const mode = sConf.mode || 'off';
-          const report = shadowReports[rName] || { analyzed: 0, agreement: '0%', low_confidence: 0 };
-
-          return (
-            <div key={rName} className="glass-panel rounded-2xl border border-zinc-800 p-6 space-y-6 shadow-xl">
-              <div className="flex items-center justify-between border-b border-zinc-850 pb-4">
-                <div>
-                  <h4 className="font-bold text-base text-zinc-200 flex items-center gap-3">
-                    {rName}
-                    <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${mode === 'live' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : (mode === 'shadow' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-zinc-800 text-zinc-400 border-zinc-700')}`}>
-                      {mode.toUpperCase()} MODE
-                    </span>
-                  </h4>
-                  <p className="text-xs text-zinc-500 mt-1">Policy: <span className="text-indigo-400 font-semibold">{sConf.policy}</span> | Confidence threshold: <span className="font-mono text-zinc-300">{sConf.confidence_threshold}</span></p>
-                </div>
-
-                <div className="flex items-center gap-2 bg-zinc-900/55 p-1.5 rounded-xl border border-zinc-850 text-xs">
-                  <button 
-                    onClick={() => handleSetMode(rName, 'shadow')}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${mode === 'shadow' ? 'bg-amber-600 text-white font-semibold' : 'text-zinc-400 hover:text-zinc-200'}`}
-                  >
-                    Shadow
-                  </button>
-                  <button 
-                    onClick={() => handleSetMode(rName, 'live')}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${mode === 'live' ? 'bg-emerald-600 text-white font-semibold' : 'text-zinc-400 hover:text-zinc-200'}`}
-                  >
-                    Go Live
-                  </button>
-                  <button 
-                    onClick={() => handleSetMode(rName, 'off')}
-                    className={`px-3 py-1.5 rounded-lg transition-colors ${mode === 'off' ? 'bg-zinc-800 text-zinc-300 font-semibold' : 'text-zinc-400 hover:text-zinc-200'}`}
-                  >
-                    Disable
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-3 gap-6">
-                {/* Candidates */}
-                <div className="space-y-2 col-span-2">
-                  <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Eligible Routing Candidates:</span>
-                  <div className="grid grid-cols-2 gap-3">
-                    {r.candidates?.map((c: any, idx: number) => {
-                      const pHealth = providerHealth[c.provider] || {};
-                      const isUnhealthy = pHealth.circuit === 'open';
-                      return (
-                        <div key={idx} className="bg-zinc-950/40 border border-zinc-850 p-3 rounded-xl flex items-center justify-between text-xs font-mono">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-zinc-300">{c.provider}</span>
-                            <span className="text-zinc-505">/</span>
-                            <span className="text-zinc-404 truncate max-w-[120px]">{c.model}</span>
-                          </div>
-                          <span className={`h-2 w-2 rounded-full ${isUnhealthy ? 'bg-rose-500 animate-pulse' : 'bg-emerald-500'}`}></span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Shadow report */}
-                <div className="bg-zinc-900/30 border border-zinc-855 rounded-2xl p-4 space-y-3">
-                  <span className="text-[10px] text-zinc-505 font-bold uppercase tracking-wider">Shadow evaluation report:</span>
-                  <div className="space-y-2 text-xs">
-                    <div className="flex justify-between"><span className="text-zinc-404">Total Analyzed:</span> <span className="font-mono text-zinc-202">{report.analyzed || 0} reqs</span></div>
-                    <div className="flex justify-between"><span className="text-zinc-404">Classifier Confidence:</span> <span className="font-mono text-zinc-202">{report.agreement || '100%'}</span></div>
-                    <div className="flex justify-between"><span className="text-zinc-404">Low-Confidence Rate:</span> <span className="font-mono text-zinc-202">{report.low_confidence || 0}</span></div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="border-t border-zinc-855 pt-4 flex justify-between">
-                <div className="text-xs text-zinc-505 flex items-center gap-1.5">
-                  <Clock className="h-4 w-4" />
-                  <span>Session Affinity: {sConf.session_affinity?.enabled ? `Enabled (${sConf.session_affinity?.ttl || '15m'})` : 'Disabled'}</span>
-                </div>
-                <button 
-                  onClick={() => handleDelete(rName)}
-                  className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 px-3 py-1 text-xs rounded-lg transition-colors flex items-center gap-1"
-                >
-                  <Trash2 className="h-3.5 w-3.5" /> Remove Group
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
     </div>
   );
 }
@@ -2318,8 +2374,8 @@ function ActivityTab({ activities, apiCall }: any) {
             <thead>
               <tr className="border-b border-zinc-800 text-zinc-400 font-semibold uppercase tracking-wider">
                 <th className="pb-3">Time</th>
-                <th className="pb-3">Requested Alias</th>
-                <th className="pb-3">Resolved Route</th>
+                <th className="pb-3">Public Name</th>
+                <th className="pb-3">Selected Provider/Model</th>
                 <th className="pb-3">Latency</th>
                 <th className="pb-3">Status</th>
               </tr>
@@ -2506,8 +2562,8 @@ function KeysTab({ clientKeys, apiCall, fetchKeys, toastSuccess, config }: any) 
           </div>
 
           <div className="space-y-2">
-            <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">Restrict to Specific Aliases (Optional)</label>
-            <p className="text-[10px] text-zinc-500 leading-normal mb-2">If no aliases are selected, the key can access all configured aliases.</p>
+            <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">Restrict to Specific Public Routes (Optional)</label>
+            <p className="text-[10px] text-zinc-500 leading-normal mb-2">If no routes are selected, the key can access all configured public routes.</p>
             <div className="flex flex-wrap gap-2">
               {Object.keys(config.aliases || {}).map((aName: string) => {
                 const isSelected = allowedAliases.includes(aName);
@@ -2537,7 +2593,7 @@ function KeysTab({ clientKeys, apiCall, fetchKeys, toastSuccess, config }: any) 
               <tr className="border-b border-zinc-800 text-zinc-400 font-semibold uppercase tracking-wider">
                 <th className="pb-3">Name</th>
                 <th className="pb-3">Prefix</th>
-                <th className="pb-3">Allowed Aliases</th>
+                <th className="pb-3">Allowed Routes</th>
                 <th className="pb-3">Status</th>
                 <th className="pb-3">Created</th>
                 <th className="pb-3 text-right">Actions</th>
@@ -2559,7 +2615,7 @@ function KeysTab({ clientKeys, apiCall, fetchKeys, toastSuccess, config }: any) 
                           {k.allowed_aliases.map((a: string) => <span key={a} className="bg-zinc-800 text-zinc-300 text-[10px] px-1.5 py-0.5 rounded font-mono">{a}</span>)}
                         </div>
                       ) : (
-                        <span className="text-zinc-500 italic">All aliases</span>
+                          <span className="text-zinc-500 italic">All routes</span>
                       )}
                     </td>
                     <td className="py-4">
@@ -2611,8 +2667,8 @@ function PlaygroundTab({ config, apiCall }: any) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const keys = Object.keys(config.aliases || {});
-    if (keys.length > 0) setSelectedAlias(keys[0]);
+    const routes = buildUnifiedRoutes(config, {});
+    if (routes.length > 0) setSelectedAlias(routes[0].name);
   }, [config]);
 
   const handleSend = async () => {
@@ -2654,9 +2710,9 @@ function PlaygroundTab({ config, apiCall }: any) {
         <h3 className="font-bold text-sm tracking-wide uppercase text-zinc-300 border-b border-zinc-800 pb-2">Diagnostic Playground</h3>
         
         <div>
-          <label className="block text-xs font-semibold text-zinc-400 mb-1">Select Active Alias</label>
+          <label className="block text-xs font-semibold text-zinc-400 mb-1">Select Public Route</label>
           <select value={selectedAlias} onChange={(e) => setSelectedAlias(e.target.value)} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100">
-            {Object.keys(config.aliases || {}).map(k => <option key={k} value={k}>{k}</option>)}
+            {buildUnifiedRoutes(config, {}).map((r: any) => <option key={r.id} value={r.name}>{r.name} ({r.mode})</option>)}
           </select>
         </div>
 
