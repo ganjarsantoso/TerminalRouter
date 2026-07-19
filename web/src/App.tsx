@@ -1485,7 +1485,7 @@ const PRIV_LABELS = {
   cloud: 'Public Cloud (Shared API)'
 };
 
-function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSuccess }: any) {
+function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   
   // Custom Profile Editor values
@@ -1667,10 +1667,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
     if (a.model) configuredModels.add(a.model);
   });
   
-  const allModels = Array.from(new Set([
-    ...Array.from(configuredModels),
-    ...(discoveredModels?.map((m: any) => m.id || m.model) || [])
-  ])).sort();
+  const allModels = Array.from(configuredModels).sort();
 
   return (
     <div className="grid grid-cols-3 gap-8">
