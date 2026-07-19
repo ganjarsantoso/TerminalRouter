@@ -129,7 +129,11 @@ func (s *Store) GetAssessment(ctx context.Context, id string) (*AssessmentRecord
 			estimated_cost, actual_cost, confidence, proposed_profile_json,
 			applied_at, applied_fields, error_text
 		FROM model_assessments WHERE assessment_id=?`, id)
-	return scanAssessmentData(row)
+	d, err := scanAssessmentData(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	return d, err
 }
 
 // ListAssessments returns assessment summaries for a given model.
