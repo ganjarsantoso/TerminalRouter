@@ -1519,6 +1519,14 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
   const [assessProposal, setAssessProposal] = useState<any>(null);
   const [assessLoading, setAssessLoading] = useState(false);
 
+  // Independent benchmark (external consensus) state
+  const [extView, setExtView] = useState<'none' | 'search' | 'review'>('none');
+  const [extConsensus, setExtConsensus] = useState<any>(null);
+  const [extRegistry, setExtRegistry] = useState<any>(null);
+  const [extProposal, setExtProposal] = useState<any>(null);
+  const [extLoading, setExtLoading] = useState(false);
+  const [extProposalCaps, setExtProposalCaps] = useState<any>({});
+
   // Load properties when selectedModel changes
   useEffect(() => {
     if (!selectedModel) return;
@@ -1673,6 +1681,59 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
     setAssessEstimate(null);
   };
 
+  // Independent benchmark (external consensus) handlers
+  const handleOpenExternal = async () => {
+    if (!selectedModel) return;
+    setExtLoading(true);
+    try {
+      if (!extRegistry) {
+        try { setExtRegistry(await apiCall(`${API_BASE}/external-registry`)); } catch (e) {}
+      }
+      const consensus = await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/external-evidence`);
+      setExtConsensus(consensus);
+      const proposal = await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/external-evidence/proposal`, 'POST', {});
+      setExtProposal(proposal);
+      const initCaps: any = {};
+      (proposal.fields || []).forEach((f: any) => { initCaps[f.capability] = f.proposed; });
+      setExtProposalCaps(initCaps);
+      setExtView('review');
+    } catch (e: any) {
+      const msg = e?.message || '';
+      if (msg.includes('no_external_evidence')) {
+        toastError('No curated independent benchmark evidence found for this model.');
+      } else {
+        toastError('Could not load independent benchmark evidence.');
+      }
+      setExtView('none');
+    }
+    setExtLoading(false);
+  };
+
+  const handleApplyExternalProposal = async () => {
+    if (!extProposal) return;
+    setExtLoading(true);
+    try {
+      const caps: any = {};
+      (extProposal.fields || []).forEach((f: any) => { caps[f.capability] = extProposalCaps[f.capability] ?? f.proposed; });
+      await apiCall(`${API_BASE}/external-profile-proposals/${encodeURIComponent(extProposal.id)}/apply`, 'POST', { capabilities: caps });
+      toastSuccess('Independent assessment applied as external-consensus profile');
+      setExtView('none');
+      setExtProposal(null);
+      setExtConsensus(null);
+      fetchConfig();
+    } catch (e) {}
+    setExtLoading(false);
+  };
+
+  const handleDismissExternal = async () => {
+    if (extProposal) {
+      try { await apiCall(`${API_BASE}/external-profile-proposals/${encodeURIComponent(extProposal.id)}/dismiss`, 'POST', {}); } catch (e) {}
+    }
+    setExtView('none');
+    setExtProposal(null);
+    setExtConsensus(null);
+  };
+
   // Compile full catalog of configured models (provider/model format)
   const configuredModels = new Set<string>();
   Object.values(config.routes || {}).forEach((r: any) => {
@@ -1742,6 +1803,10 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
                 <p className="text-xs text-zinc-500 mt-1">Specify model scores (0-10, 0.5 increments) to inform the smart route task classifier.</p>
               </div>
               <div className="flex items-center gap-2">
+                <button onClick={handleOpenExternal} disabled={extLoading} className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-3 py-1.5 text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50">
+                  {extLoading && <RefreshCw className="h-3 w-3 animate-spin" />}
+                  <Database className="h-3 w-3" /> Import Independent Assessment
+                </button>
                 <button onClick={handleStartAssessSetup} className="rounded-lg border border-indigo-600/40 hover:bg-indigo-600/10 px-3 py-1.5 text-xs text-indigo-400 flex items-center gap-1.5">
                   <Play className="h-3 w-3" /> Assess Model
                 </button>
@@ -1946,11 +2011,78 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
               </div>
             )}
 
-            {/* Disclaimer */}
-            <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 text-[10px] text-zinc-400 flex items-start gap-2">
-              <Info className="h-4 w-4 text-indigo-400 flex-shrink-0" />
-              <span>Capability profiles guide routing and are not objective universal rankings. Behavior depends on model version, provider, context, and tools.</span>
-            </div>
+            {/* Independent benchmark (external consensus) review modal */}
+            {extView === 'review' && extProposal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm overflow-y-auto py-8">
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-2xl w-full mx-4 space-y-5 shadow-2xl">
+                  <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <h4 className="font-bold text-sm text-zinc-100 flex items-center gap-2">
+                      <Database className="h-4 w-4 text-emerald-400" /> Independent Benchmark Consensus
+                    </h4>
+                    <button onClick={handleDismissExternal} className="text-zinc-500 hover:text-zinc-300 text-lg">&times;</button>
+                  </div>
+
+                  <div className="bg-emerald-950/30 border border-emerald-900/50 rounded-xl p-3 text-xs text-zinc-300 space-y-1">
+                    <div className="flex justify-between"><span>Model</span><span className="font-mono text-zinc-100">{extProposal.provider_id}/{extProposal.model_id}</span></div>
+                    <div className="flex justify-between"><span>Registry version</span><span className="font-mono text-zinc-100">{extProposal.registry_version}</span></div>
+                    <div className="flex justify-between"><span>Overall consensus</span><span className="font-semibold text-emerald-400">{(extConsensus?.overall ?? 0).toFixed(1)}/10</span></div>
+                    <div className="flex justify-between"><span>Confidence</span><span className="font-semibold text-emerald-400">{((extConsensus?.confidence ?? 0) * 100).toFixed(0)}%</span></div>
+                    <div className="flex justify-between gap-2">
+                      <span>Sources</span>
+                      <span className="font-mono text-zinc-100 text-right">{(extConsensus?.sources || []).join(', ')}</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <h5 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Proposed Capabilities (adjust before applying)</h5>
+                    {(extProposal.fields || []).map((f: any) => (
+                      <div key={f.capability} className="bg-zinc-800/30 rounded-lg p-3 text-xs space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-zinc-200 capitalize">{f.capability.replace(/_/g, ' ')}</span>
+                          <span className="font-bold text-emerald-400">{extProposalCaps[f.capability] ?? f.proposed}/10</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0" max="10" step="0.5"
+                          value={extProposalCaps[f.capability] ?? f.proposed}
+                          onChange={(e) => setExtProposalCaps({ ...extProposalCaps, [f.capability]: Number(e.target.value) })}
+                          className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                        />
+                        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-zinc-500">
+                          {f.current != null && <span>Current: <span className="text-zinc-400">{f.current}/10</span></span>}
+                          {f.evidence?.length > 0 && (
+                            <span>
+                              Evidence:{' '}
+                              {f.evidence.map((ev: any, i: number) => (
+                                <span key={i} className="text-zinc-400">
+                                  {ev.normalized?.source}{ev.normalized ? `=${(ev.normalized.normalized ?? 0).toFixed(1)}` : ''}
+                                  {i < f.evidence.length - 1 ? ', ' : ''}
+                                </span>
+                              ))}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 text-[10px] text-zinc-400 flex items-start gap-2">
+                    <Info className="h-4 w-4 text-emerald-400 flex-shrink-0" />
+                    <span>External-consensus values become the authoritative baseline (source: external-consensus). They sit below any manual override and below a local self-assessment, and above the built-in catalog. Manual edits never overwrite a populated independent source.</span>
+                  </div>
+
+                  <div className="flex justify-end gap-2 border-t border-zinc-800 pt-3 flex-wrap">
+                    <button onClick={handleDismissExternal} className="rounded-lg border border-zinc-800 hover:bg-zinc-800 px-3 py-1.5 text-xs">Discard</button>
+                    <button onClick={handleApplyExternalProposal} disabled={extLoading}
+                      className="rounded-lg bg-emerald-600 hover:bg-emerald-500 px-4 py-1.5 text-xs font-semibold disabled:opacity-50 flex items-center gap-1">
+                      {extLoading && <RefreshCw className="h-3 w-3 animate-spin" />}
+                      Apply as External Profile
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
 
             {/* Slider capabilities Grid */}
             <div>

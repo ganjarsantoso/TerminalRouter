@@ -30,6 +30,7 @@ func newModelProfileCmd() *cobra.Command {
 		modelProfileReset(),
 		modelProfileValidate(),
 		modelAssessCmd(),
+		modelExternalCmd(),
 	)
 	return cmd
 }

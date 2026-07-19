@@ -156,6 +156,52 @@ CREATE TABLE IF NOT EXISTS model_assessment_results (
 );
 
 CREATE INDEX IF NOT EXISTS idx_assessment_results_cat ON model_assessment_results(assessment_id, category);
+
+CREATE TABLE IF NOT EXISTS external_evidence_records (
+    id TEXT PRIMARY KEY,
+    source TEXT NOT NULL,
+    model_identity TEXT NOT NULL,
+    benchmark TEXT NOT NULL,
+    value REAL NOT NULL,
+    scale TEXT NOT NULL,
+    capability TEXT NOT NULL,
+    reported_at TEXT NOT NULL,
+    url TEXT,
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_external_evidence_model ON external_evidence_records(model_identity);
+
+CREATE TABLE IF NOT EXISTS external_profile_proposals (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    model_identity TEXT NOT NULL,
+    fields_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    registry_version TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_external_proposals_status ON external_profile_proposals(status);
+
+CREATE TABLE IF NOT EXISTS external_profile_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_id TEXT NOT NULL,
+    proposal_id TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    capabilities_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_external_imports_profile ON external_profile_imports(profile_id);
+
+CREATE TABLE IF NOT EXISTS external_registry_versions (
+    version TEXT PRIMARY KEY,
+    updated_at TEXT NOT NULL,
+    source_count INTEGER NOT NULL,
+    model_count INTEGER NOT NULL,
+    evidence_count INTEGER NOT NULL
+);
 `
 
-const currentSchemaVersion = 4
+const currentSchemaVersion = 5

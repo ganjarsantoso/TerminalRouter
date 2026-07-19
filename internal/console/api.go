@@ -46,6 +46,16 @@ func (s *Server) mountAPI(mux *http.ServeMux) {
 	get("GET /admin/v1/model-assessments/{assessmentID}/proposal", s.handleGetAssessmentProposal)
 	mut("POST /admin/v1/model-assessments/{assessmentID}/apply", s.handleApplyAssessmentProposal)
 
+	// Independent benchmark profile import (external consensus)
+	get("GET /admin/v1/external-registry", s.handleExternalRegistryInfo)
+	get("GET /admin/v1/model-profiles/{id}/external-evidence", s.handleExternalEvidenceSearch)
+	mut("POST /admin/v1/model-profiles/{id}/external-evidence/proposal", s.handleExternalEvidenceProposal)
+	get("GET /admin/v1/external-profile-proposals", s.handleListExternalProposals)
+	get("GET /admin/v1/external-profile-proposals/{proposalID}", s.handleGetExternalProposal)
+	mut("POST /admin/v1/external-profile-proposals/{proposalID}/dismiss", s.handleDismissExternalProposal)
+	mut("POST /admin/v1/external-profile-proposals/{proposalID}/apply", s.handleApplyExternalProposal)
+	get("GET /admin/v1/external-profile-imports", s.handleExternalImportHistory)
+
 	// Aliases
 	get("GET /admin/v1/aliases", s.handleListAliases)
 	mut("POST /admin/v1/aliases", s.handleCreateAlias)
