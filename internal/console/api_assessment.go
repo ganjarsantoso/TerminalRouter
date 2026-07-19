@@ -119,7 +119,7 @@ func (s *Server) handleStartAssessment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetAssessment(w http.ResponseWriter, r *http.Request) {
-	aid := r.PathValue("assessment-id")
+	aid := r.PathValue("assessmentID")
 	svc := s.getAssessmentService()
 	if svc == nil {
 		writeError(w, http.StatusInternalServerError, "service_error", "cannot initialize assessment service")
@@ -134,7 +134,7 @@ func (s *Server) handleGetAssessment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancelAssessment(w http.ResponseWriter, r *http.Request) {
-	aid := r.PathValue("assessment-id")
+	aid := r.PathValue("assessmentID")
 	svc := s.getAssessmentService()
 	if svc == nil {
 		writeError(w, http.StatusInternalServerError, "service_error", "cannot initialize assessment service")
@@ -167,7 +167,7 @@ func (s *Server) handleListAssessments(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetAssessmentProposal(w http.ResponseWriter, r *http.Request) {
-	aid := r.PathValue("assessment-id")
+	aid := r.PathValue("assessmentID")
 	svc := s.getAssessmentService()
 	if svc == nil {
 		writeError(w, http.StatusInternalServerError, "service_error", "cannot initialize assessment service")
@@ -199,7 +199,7 @@ func (s *Server) handleGetAssessmentProposal(w http.ResponseWriter, r *http.Requ
 }
 
 func (s *Server) handleApplyAssessmentProposal(w http.ResponseWriter, r *http.Request) {
-	aid := r.PathValue("assessment-id")
+	aid := r.PathValue("assessmentID")
 	var body smart.ApplyProposalRequest
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())

@@ -41,10 +41,10 @@ func (s *Server) mountAPI(mux *http.ServeMux) {
 	mut("POST /admin/v1/model-profiles/{id}/assessment/estimate", s.handleAssessmentEstimate)
 	mut("POST /admin/v1/model-profiles/{id}/assessments", s.handleStartAssessment)
 	get("GET /admin/v1/model-profiles/{id}/assessments", s.handleListAssessments)
-	get("GET /admin/v1/model-assessments/{assessment-id}", s.handleGetAssessment)
-	mut("POST /admin/v1/model-assessments/{assessment-id}/cancel", s.handleCancelAssessment)
-	get("GET /admin/v1/model-assessments/{assessment-id}/proposal", s.handleGetAssessmentProposal)
-	mut("POST /admin/v1/model-assessments/{assessment-id}/apply", s.handleApplyAssessmentProposal)
+	get("GET /admin/v1/model-assessments/{assessmentID}", s.handleGetAssessment)
+	mut("POST /admin/v1/model-assessments/{assessmentID}/cancel", s.handleCancelAssessment)
+	get("GET /admin/v1/model-assessments/{assessmentID}/proposal", s.handleGetAssessmentProposal)
+	mut("POST /admin/v1/model-assessments/{assessmentID}/apply", s.handleApplyAssessmentProposal)
 
 	// Aliases
 	get("GET /admin/v1/aliases", s.handleListAliases)
