@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -24,20 +26,23 @@ func DefaultSearcher() Searcher {
 // NewWebSearcher builds a WebSearcher from configuration. It honors a custom
 // endpoint, an optional proxy, and insecure_skip_verify (for TLS-intercepting
 // proxies). There is no hardcoded model or engine; the default endpoint is
-// DuckDuckGo's public HTML endpoint.
+// DuckDuckGo's public HTML endpoint. The TERMROUTER_WEBSEARCH_INSECURE=1
+// environment variable also enables insecure_skip_verify regardless of config.
 func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
+	insecure := cfg.InsecureSkipVerify || os.Getenv("TERMROUTER_WEBSEARCH_INSECURE") == "1"
 	transport := &http.Transport{}
 	if cfg.Proxy != "" {
 		if pu, err := url.Parse(cfg.Proxy); err == nil {
 			transport.Proxy = http.ProxyURL(pu)
 		}
 	}
-	if cfg.InsecureSkipVerify {
+	if insecure {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		log.Printf("[external] web search TLS verification disabled (insecure_skip_verify); this is for TLS-intercepting proxies only")
 	}
 	return &WebSearcher{
 		Client:   &http.Client{Timeout: timeout, Transport: transport},
