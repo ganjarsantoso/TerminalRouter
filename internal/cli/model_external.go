@@ -26,11 +26,12 @@ func modelExternalCmd() *cobra.Command {
 }
 
 func newExternalService() (*external.Service, func(), error) {
-	_, _, store, _, err := app.LoadRuntime(mustHome())
+	cfg, _, store, _, err := app.LoadRuntime(mustHome())
 	if err != nil {
 		return nil, nil, err
 	}
-	return external.NewService(store, nil, nil), func() { store.Close() }, nil
+	searcher := external.NewWebSearcher(cfg.WebSearch)
+	return external.NewService(store, searcher, nil), func() { store.Close() }, nil
 }
 
 func modelExternalRegistry() *cobra.Command {

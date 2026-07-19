@@ -22,6 +22,7 @@ type Config struct {
 	ModelProfiles map[string]ModelProfileConfig `yaml:"model_profiles,omitempty" json:"model_profiles,omitempty"`
 	Logging       LoggingConfig               `yaml:"logging" json:"logging"`
 	Summarizer    SummarizerConfig            `yaml:"summarizer,omitempty" json:"summarizer,omitempty"`
+	WebSearch     WebSearchConfig             `yaml:"web_search,omitempty" json:"web_search,omitempty"`
 }
 
 // SummarizerConfig selects the model used to summarize fetched benchmark pages
@@ -30,6 +31,22 @@ type Config struct {
 type SummarizerConfig struct {
 	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
+}
+
+// WebSearchConfig configures the live web-search backend used to gather
+// independent benchmark evidence. The defaults use DuckDuckGo's HTML endpoint,
+// which needs no API key. In environments behind a TLS-intercepting proxy, set
+// insecure_skip_verify (or a proxy) so the search can complete.
+type WebSearchConfig struct {
+	// Endpoint overrides the search URL (e.g. a proxy or alternative engine).
+	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	// InsecureSkipVerify disables TLS certificate verification (use only behind
+	// a trusted TLS-intercepting proxy).
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify,omitempty" json:"insecure_skip_verify,omitempty"`
+	// Proxy is an optional HTTP(S) proxy URL for all web-search traffic.
+	Proxy string `yaml:"proxy,omitempty" json:"proxy,omitempty"`
+	// TimeoutSeconds bounds each request (default 15).
+	TimeoutSeconds int `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
 }
 
 type ServerConfig struct {

@@ -2,6 +2,7 @@ package external
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"html"
 	"io"
@@ -10,13 +11,37 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/termrouter/termrouter/internal/config"
 )
 
 // DefaultSearcher returns the default live web searcher (DuckDuckGo HTML,
 // no API key required). It is used by NewService when no searcher is injected.
 func DefaultSearcher() Searcher {
+	return NewWebSearcher(config.WebSearchConfig{})
+}
+
+// NewWebSearcher builds a WebSearcher from configuration. It honors a custom
+// endpoint, an optional proxy, and insecure_skip_verify (for TLS-intercepting
+// proxies). There is no hardcoded model or engine; the default endpoint is
+// DuckDuckGo's public HTML endpoint.
+func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
+	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	transport := &http.Transport{}
+	if cfg.Proxy != "" {
+		if pu, err := url.Parse(cfg.Proxy); err == nil {
+			transport.Proxy = http.ProxyURL(pu)
+		}
+	}
+	if cfg.InsecureSkipVerify {
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
 	return &WebSearcher{
-		Client: &http.Client{Timeout: 15 * time.Second},
+		Client:   &http.Client{Timeout: timeout, Transport: transport},
+		Endpoint: cfg.Endpoint,
 	}
 }
 

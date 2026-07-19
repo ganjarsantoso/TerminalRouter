@@ -9,14 +9,16 @@ import (
 )
 
 // getExternalService returns an ExternalEvidenceService backed by the store, a
-// live web searcher, and an LLM summarizer that reads fetched pages.
+// live web searcher (configured, e.g. for TLS-intercepting proxies), and an LLM
+// summarizer that reads fetched pages.
 func (s *Server) getExternalService() *external.Service {
 	cfg, err := s.loadConfig()
 	if err != nil {
 		cfg = &revisionedConfig{Cfg: &config.Config{}}
 	}
+	searcher := external.NewWebSearcher(cfg.Cfg.WebSearch)
 	summarizer := NewProviderSummarizer(cfg.Cfg, s.Creds, summarizerTarget{})
-	return external.NewService(s.Store, nil, summarizer)
+	return external.NewService(s.Store, searcher, summarizer)
 }
 
 func (s *Server) handleExternalRegistryInfo(w http.ResponseWriter, r *http.Request) {
