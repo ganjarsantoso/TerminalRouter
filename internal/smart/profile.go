@@ -97,7 +97,7 @@ func (s *ProfileStore) Resolve(providerID, modelID, profileID string) (ModelProf
 
 	return ModelProfile{
 		ID: ProfileKey(providerID, modelID), ProviderID: providerID, ModelID: modelID,
-		Source: SourceUnknown, Capabilities: map[string]int{},
+		Source: SourceUnknown, Capabilities: map[string]float64{},
 	}, false
 }
 
@@ -120,7 +120,7 @@ func familyKey(providerID, modelID string) string {
 
 func mergeWithDefaults(p ModelProfile) ModelProfile {
 	if p.Capabilities == nil {
-		p.Capabilities = map[string]int{}
+		p.Capabilities = map[string]float64{}
 	}
 	if p.Version == "" {
 		p.Version = "user"
@@ -131,8 +131,8 @@ func mergeWithDefaults(p ModelProfile) ModelProfile {
 // ValidateProfile checks capability ranges and property values.
 func ValidateProfile(p ModelProfile) error {
 	for k, v := range p.Capabilities {
-		if v < 0 || v > 5 {
-			return fmt.Errorf("capability %q must be 0–5, got %d", k, v)
+		if v < 0 || v > 10 {
+			return fmt.Errorf("capability %q must be 0–10, got %g", k, v)
 		}
 	}
 	props := p.Properties
@@ -153,7 +153,7 @@ func ValidateProfile(p ModelProfile) error {
 }
 
 // Cap returns a capability level (0 if missing).
-func (p ModelProfile) Cap(name string) int {
+func (p ModelProfile) Cap(name string) float64 {
 	if p.Capabilities == nil {
 		return 0
 	}

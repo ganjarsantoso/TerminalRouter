@@ -9,7 +9,7 @@ import (
 const ClassifierVersion = "heuristic-v1"
 const CatalogVersion = "builtin-v1"
 
-// Capability dimension names (1–5 scale; 0 = unknown).
+// Capability dimension names (1–10 scale; 0 = unknown; 0.5 increments).
 const (
 	CapGeneral               = "general"
 	CapReasoning             = "reasoning"
@@ -118,8 +118,8 @@ type ModelProfile struct {
 	ProviderID   string         `json:"provider_id" yaml:"-"`
 	ModelID      string         `json:"model_id" yaml:"-"`
 	Version      string         `json:"version" yaml:"version,omitempty"`
-	Source       string         `json:"source" yaml:"source,omitempty"`
-	Capabilities map[string]int `json:"capabilities" yaml:"capabilities,omitempty"`
+	Source       string           `json:"source" yaml:"source,omitempty"`
+	Capabilities map[string]float64 `json:"capabilities" yaml:"capabilities,omitempty"`
 	Properties   ModelProperties `json:"properties" yaml:"properties,omitempty"`
 }
 
@@ -149,8 +149,8 @@ type TaskPreferences struct {
 type TaskProfile struct {
 	PrimaryType      string           `json:"primary_type"`
 	SecondaryTypes   []string         `json:"secondary_types,omitempty"`
-	Complexity       string           `json:"complexity"`
-	Requirements     map[string]int   `json:"requirements"`
+	Complexity       string             `json:"complexity"`
+	Requirements     map[string]float64 `json:"requirements"`
 	HardRequirements HardRequirements `json:"hard_requirements"`
 	Preferences      TaskPreferences  `json:"preferences"`
 	Confidence       float64          `json:"confidence"`
@@ -296,10 +296,10 @@ const (
 type AssessmentCategory struct {
 	Name        string           `json:"name"`
 	Status      AssessmentStatus `json:"status"`
-	Score       int              `json:"score"`               // 0-5
+	Score       float64          `json:"score"`              // 0-10 (0.5 increments)
 	Confidence  float64          `json:"confidence"`          // 0.0-1.0
-	TestsPassed int              `json:"tests_passed"`
-	TestsTotal  int              `json:"tests_total"`
+	TestsPassed float64         `json:"tests_passed"`
+	TestsTotal  float64          `json:"tests_total"`
 	LatencyMs   int              `json:"latency_ms,omitempty"`
 	Evidence    string           `json:"evidence,omitempty"` // summary text
 }

@@ -41,7 +41,7 @@ func smartClassify() *cobra.Command {
 			fmt.Printf("Complexity:    %s\n", task.Complexity)
 			fmt.Printf("Confidence:    %.2f\n", task.Confidence)
 			fmt.Printf("Classifier:    %s\n", task.ClassifierVersion)
-			fmt.Printf("Requirements:  coding=%d reasoning=%d analysis=%d tool_use=%d\n",
+			fmt.Printf("Requirements:  coding=%.0f reasoning=%.0f analysis=%.0f tool_use=%.0f\n",
 				task.Requirements[smart.CapCoding],
 				task.Requirements[smart.CapReasoning],
 				task.Requirements[smart.CapAnalysis],

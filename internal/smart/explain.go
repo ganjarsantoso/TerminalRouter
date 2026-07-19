@@ -20,13 +20,13 @@ func FormatDecision(d *Decision) string {
 	fmt.Fprintf(&b, "Task classification:\n")
 	fmt.Fprintf(&b, "  Primary type:       %s\n", d.Task.PrimaryType)
 	fmt.Fprintf(&b, "  Complexity:         %s\n", d.Task.Complexity)
-	fmt.Fprintf(&b, "  Coding requirement: %d/5\n", d.Task.Requirements[CapCoding])
-	fmt.Fprintf(&b, "  Reasoning:          %d/5\n", d.Task.Requirements[CapReasoning])
-	fmt.Fprintf(&b, "  Analysis:           %d/5\n", d.Task.Requirements[CapAnalysis])
+	fmt.Fprintf(&b, "  Coding requirement: %.0f/10\n", d.Task.Requirements[CapCoding])
+	fmt.Fprintf(&b, "  Reasoning:          %.0f/10\n", d.Task.Requirements[CapReasoning])
+	fmt.Fprintf(&b, "  Analysis:           %.0f/10\n", d.Task.Requirements[CapAnalysis])
 	toolReq := "not required"
 	if d.Task.HardRequirements.Tools {
 		toolReq = "required"
-	} else if d.Task.Requirements[CapToolUse] >= 3 {
+	} else if d.Task.Requirements[CapToolUse] >= 6 {
 		toolReq = "preferred"
 	}
 	fmt.Fprintf(&b, "  Tool use:           %s\n", toolReq)

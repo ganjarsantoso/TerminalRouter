@@ -69,7 +69,7 @@ func DecisionFromRecord(r *storage.SmartDecisionRecord) *Decision {
 			Complexity:        r.TaskComplexity,
 			Confidence:        r.Confidence,
 			ClassifierVersion: r.ClassifierVersion,
-			Requirements:      map[string]int{},
+			Requirements:      map[string]float64{},
 		},
 	}
 	_ = json.Unmarshal([]byte(r.SelectionReasons), &d.SelectionReasons)

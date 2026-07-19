@@ -122,7 +122,7 @@ func modelAssessShow() *cobra.Command {
 				rec.AssessmentID, rec.Status, rec.Depth, rec.BenchmarkVersion, rec.Confidence)
 			fmt.Println("\nCategories:")
 			for _, cat := range rec.Categories {
-				fmt.Printf("  %-22s score=%d confidence=%.2f (%d/%d tests)\n",
+				fmt.Printf("  %-22s score=%.1f confidence=%.2f (%.0f/%.0f tests)\n",
 					cat.Name, cat.Score, cat.Confidence, cat.TestsPassed, cat.TestsTotal)
 			}
 			return nil
@@ -173,7 +173,7 @@ func modelAssessApply() *cobra.Command {
 			}
 			mp := cfg.ModelProfiles[key]
 			if mp.Capabilities == nil {
-				mp.Capabilities = map[string]int{}
+				mp.Capabilities = map[string]float64{}
 			}
 			for k, v := range prop.Capabilities {
 				if len(accepted) == 0 || containsString(accepted, k) {
@@ -354,7 +354,7 @@ func modelProfileShow() *cobra.Command {
 			fmt.Printf("Profile: %s\nSource:  %s\nVersion: %s\n\nCapabilities:\n", p.ID, p.Source, p.Version)
 			for _, cap := range smart.AllCapabilities {
 				if v, ok := p.Capabilities[cap]; ok {
-					fmt.Printf("  %-22s %d\n", cap, v)
+					fmt.Printf("  %-22s %.1f\n", cap, v)
 				}
 			}
 			fmt.Printf("\nProperties:\n")
@@ -368,7 +368,7 @@ func modelProfileShow() *cobra.Command {
 
 func modelProfileSet() *cobra.Command {
 	var (
-		general, coding, reasoning, analysis, writing, toolUse int
+		general, coding, reasoning, analysis, writing, toolUse float64
 		costTier, latencyTier                                   int
 		privacy                                                 string
 		vision, tools                                           string
@@ -390,10 +390,10 @@ func modelProfileSet() *cobra.Command {
 			}
 			mp := cfg.ModelProfiles[id]
 			if mp.Capabilities == nil {
-				mp.Capabilities = map[string]int{}
+				mp.Capabilities = map[string]float64{}
 			}
 			mp.Source = smart.SourceUser
-			setCap := func(name string, v int, changed bool) {
+			setCap := func(name string, v float64, changed bool) {
 				if changed && v >= 0 {
 					mp.Capabilities[name] = v
 				}
@@ -435,12 +435,12 @@ func modelProfileSet() *cobra.Command {
 			return printOut(fmt.Sprintf("Profile %q saved", id), mp)
 		},
 	}
-	cmd.Flags().IntVar(&general, "general", -1, "General capability 1-5")
-	cmd.Flags().IntVar(&coding, "coding", -1, "Coding capability 1-5")
-	cmd.Flags().IntVar(&reasoning, "reasoning", -1, "Reasoning capability 1-5")
-	cmd.Flags().IntVar(&analysis, "analysis", -1, "Analysis capability 1-5")
-	cmd.Flags().IntVar(&writing, "writing", -1, "Writing capability 1-5")
-	cmd.Flags().IntVar(&toolUse, "tool-use", -1, "Tool-use capability 1-5")
+	cmd.Flags().Float64Var(&general, "general", -1, "General capability 1-10")
+	cmd.Flags().Float64Var(&coding, "coding", -1, "Coding capability 1-10")
+	cmd.Flags().Float64Var(&reasoning, "reasoning", -1, "Reasoning capability 1-10")
+	cmd.Flags().Float64Var(&analysis, "analysis", -1, "Analysis capability 1-10")
+	cmd.Flags().Float64Var(&writing, "writing", -1, "Writing capability 1-10")
+	cmd.Flags().Float64Var(&toolUse, "tool-use", -1, "Tool-use capability 1-10")
 	cmd.Flags().IntVar(&costTier, "cost-tier", 0, "Cost tier 1-5 (1=cheapest)")
 	cmd.Flags().IntVar(&latencyTier, "latency-tier", 0, "Latency tier 1-5 (1=fastest)")
 	cmd.Flags().StringVar(&privacy, "privacy", "", "local | private-cloud | cloud")

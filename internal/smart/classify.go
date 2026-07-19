@@ -321,76 +321,76 @@ func classifyFeatures(f RequestFeatures, req *normalization.NormalizedRequest) T
 		complexity = ComplexityMedium
 	}
 
-	reqs := map[string]int{
-		CapGeneral: 2, CapReasoning: 1, CapAnalysis: 1, CapCoding: 1,
-		CapWriting: 1, CapToolUse: 0, CapMathematics: 1, CapLongContext: 1,
-		CapSummarization: 1, CapExtraction: 1, CapStructuredOutput: 1,
+	reqs := map[string]float64{
+		CapGeneral: 4, CapReasoning: 2, CapAnalysis: 2, CapCoding: 2,
+		CapWriting: 2, CapToolUse: 0, CapMathematics: 2, CapLongContext: 2,
+		CapSummarization: 2, CapExtraction: 2, CapStructuredOutput: 2,
 	}
 	switch primary {
 	case TypeCodingDebug:
-		reqs[CapCoding] = 5
-		reqs[CapReasoning] = 4
-		reqs[CapAnalysis] = 3
+		reqs[CapCoding] = 10
+		reqs[CapReasoning] = 8
+		reqs[CapAnalysis] = 6
 	case TypeCodingGeneration:
-		reqs[CapCoding] = 4
-		reqs[CapReasoning] = 3
+		reqs[CapCoding] = 8
+		reqs[CapReasoning] = 6
 	case TypeCodeReview:
-		reqs[CapCoding] = 4
-		reqs[CapAnalysis] = 4
-		reqs[CapReasoning] = 3
+		reqs[CapCoding] = 8
+		reqs[CapAnalysis] = 8
+		reqs[CapReasoning] = 6
 	case TypeMathematics:
-		reqs[CapMathematics] = 5
-		reqs[CapReasoning] = 5
+		reqs[CapMathematics] = 10
+		reqs[CapReasoning] = 10
 	case TypeReasoning:
-		reqs[CapReasoning] = 5
-		reqs[CapAnalysis] = 3
+		reqs[CapReasoning] = 10
+		reqs[CapAnalysis] = 6
 	case TypeArchitectureDesign:
-		reqs[CapAnalysis] = 5
-		reqs[CapReasoning] = 4
-		reqs[CapCoding] = 3
+		reqs[CapAnalysis] = 10
+		reqs[CapReasoning] = 8
+		reqs[CapCoding] = 6
 	case TypeAnalysis, TypeResearchSynthesis:
-		reqs[CapAnalysis] = 5
-		reqs[CapReasoning] = 3
-		reqs[CapLongContext] = 3
+		reqs[CapAnalysis] = 10
+		reqs[CapReasoning] = 6
+		reqs[CapLongContext] = 6
 	case TypeSummarization:
-		reqs[CapSummarization] = 5
-		reqs[CapWriting] = 3
+		reqs[CapSummarization] = 10
+		reqs[CapWriting] = 6
 		if f.ApproxTokens > 2000 {
-			reqs[CapLongContext] = 4
+			reqs[CapLongContext] = 8
 		}
 	case TypeInformationExtraction:
-		reqs[CapExtraction] = 5
-		reqs[CapStructuredOutput] = 4
+		reqs[CapExtraction] = 10
+		reqs[CapStructuredOutput] = 8
 	case TypeCreativeWriting, TypeProfessionalWriting:
-		reqs[CapWriting] = 5
-		reqs[CapGeneral] = 3
+		reqs[CapWriting] = 10
+		reqs[CapGeneral] = 6
 	case TypeTranslation:
-		reqs[CapMultilingual] = 5
-		reqs[CapWriting] = 3
+		reqs[CapMultilingual] = 10
+		reqs[CapWriting] = 6
 	case TypeToolOperation:
-		reqs[CapToolUse] = 5
-		reqs[CapInstructionFollowing] = 4
+		reqs[CapToolUse] = 10
+		reqs[CapInstructionFollowing] = 8
 	case TypeTechnicalExplanation:
-		reqs[CapGeneral] = 3
-		reqs[CapWriting] = 3
-		reqs[CapReasoning] = 2
+		reqs[CapGeneral] = 6
+		reqs[CapWriting] = 6
+		reqs[CapReasoning] = 4
 	case TypeSimpleTransformation, TypeGeneralChat:
-		reqs[CapGeneral] = 2
+		reqs[CapGeneral] = 4
 	}
 
 	if complexity == ComplexityComplex {
-		if reqs[CapReasoning] < 4 {
-			reqs[CapReasoning]++
+		if reqs[CapReasoning] < 8 {
+			reqs[CapReasoning] += 2
 		}
-		if reqs[CapAnalysis] < 3 {
-			reqs[CapAnalysis]++
+		if reqs[CapAnalysis] < 6 {
+			reqs[CapAnalysis] += 2
 		}
 	}
 	if f.EstimatedContext > 8000 {
-		reqs[CapLongContext] = max(reqs[CapLongContext], 4)
+		reqs[CapLongContext] = maxFloat(reqs[CapLongContext], 8)
 	}
 	if f.EstimatedContext > 30000 {
-		reqs[CapLongContext] = 5
+		reqs[CapLongContext] = 10
 	}
 
 	hard := HardRequirements{
@@ -405,9 +405,9 @@ func classifyFeatures(f RequestFeatures, req *normalization.NormalizedRequest) T
 	// Tools present as optional still mark soft requirement but not always hard.
 	if f.ToolsRequired {
 		hard.Tools = true
-		reqs[CapToolUse] = max(reqs[CapToolUse], 4)
+		reqs[CapToolUse] = maxFloat(reqs[CapToolUse], 8)
 	} else if f.HasTools {
-		reqs[CapToolUse] = max(reqs[CapToolUse], 3)
+		reqs[CapToolUse] = maxFloat(reqs[CapToolUse], 6)
 	}
 
 	// Confidence from margin and signal strength
@@ -469,7 +469,7 @@ func clamp01(v float64) float64 {
 	return v
 }
 
-func max(a, b int) int {
+func maxFloat(a, b float64) float64 {
 	if a > b {
 		return a
 	}

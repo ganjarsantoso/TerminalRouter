@@ -110,7 +110,7 @@ type SmartLoggingConfig struct {
 type ModelProfileConfig struct {
 	Source       string             `yaml:"source,omitempty" json:"source,omitempty"`
 	Version      string             `yaml:"version,omitempty" json:"version,omitempty"`
-	Capabilities map[string]int     `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Capabilities map[string]float64 `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 	Properties   ModelPropertiesConfig `yaml:"properties,omitempty" json:"properties,omitempty"`
 }
 
@@ -357,8 +357,8 @@ func (c *Config) Validate() error {
 
 	for id, mp := range c.ModelProfiles {
 		for cap, v := range mp.Capabilities {
-			if v < 0 || v > 5 {
-				return fmt.Errorf("model_profiles %q: capability %q must be 0–5", id, cap)
+			if v < 0 || v > 10 {
+				return fmt.Errorf("model_profiles %q: capability %q must be 0–10", id, cap)
 			}
 		}
 		if mp.Properties.CostTier < 0 || mp.Properties.CostTier > 5 {

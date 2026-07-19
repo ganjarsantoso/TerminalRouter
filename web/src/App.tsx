@@ -1739,7 +1739,7 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
             <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
               <div>
                 <h3 className="font-bold text-base text-zinc-100 font-mono">{selectedModel}</h3>
-                <p className="text-xs text-zinc-500 mt-1">Specify model scores (0-5) to inform the smart route task classifier.</p>
+                <p className="text-xs text-zinc-500 mt-1">Specify model scores (0-10, 0.5 increments) to inform the smart route task classifier.</p>
               </div>
               <div className="flex items-center gap-2">
                 <button onClick={handleStartAssessSetup} className="rounded-lg border border-indigo-600/40 hover:bg-indigo-600/10 px-3 py-1.5 text-xs text-indigo-400 flex items-center gap-1.5">
@@ -1898,9 +1898,9 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
                           <div className="flex-1">
                             <span className="font-semibold text-zinc-200 capitalize">{diff.field.replace(/_/g, ' ')}</span>
                             <div className="text-[10px] text-zinc-500 mt-0.5">
-                              Current: <span className="text-zinc-400">{diff.current_value || 0}/5</span>
+                              Current: <span className="text-zinc-400">{diff.current_value || 0}/10</span>
                               {' → '}
-                              Proposed: <span className="text-indigo-400 font-semibold">{diff.proposed_value}/5</span>
+                              Proposed: <span className="text-indigo-400 font-semibold">{diff.proposed_value}/10</span>
                             </div>
                           </div>
                           <div className="flex items-center gap-2">
@@ -1927,7 +1927,7 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
                         {assessProposal.category_results.map((cat: any) => (
                           <div key={cat.name} className="flex justify-between bg-zinc-800/20 rounded-lg p-2 text-xs">
                             <span className="text-zinc-300 capitalize truncate mr-2">{cat.name.replace(/_/g, ' ')}</span>
-                            <span className="font-bold text-indigo-400">{cat.score}/5</span>
+                            <span className="font-bold text-indigo-400">{cat.score}/10</span>
                           </div>
                         ))}
                       </div>
@@ -1961,13 +1961,14 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
                     <div className="flex justify-between">
                       <span className="text-zinc-300 font-medium">{label}</span>
                       <span className="font-bold text-indigo-400">
-                        {capabilities[key] === 0 ? 'Unknown (0)' : `${capabilities[key]}/5`}
+                        {!capabilities[key] ? 'Unknown (0)' : `${capabilities[key]}/10`}
                       </span>
                     </div>
                     <input
                       type="range"
                       min="0"
-                      max="5"
+                      max="10"
+                      step="0.5"
                       value={capabilities[key] || 0}
                       onChange={(e) => setCapabilities({ ...capabilities, [key]: Number(e.target.value) })}
                       className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500"

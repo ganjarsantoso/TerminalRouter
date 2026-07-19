@@ -18,7 +18,7 @@ func ProfilesFromConfig(cfg *config.Config) map[string]ModelProfile {
 			ID:     id,
 			Source: mp.Source,
 			Version: mp.Version,
-			Capabilities: map[string]int{},
+			Capabilities: map[string]float64{},
 			Properties: ModelProperties{
 				Vision: mp.Properties.Vision,
 				Tools: mp.Properties.Tools,

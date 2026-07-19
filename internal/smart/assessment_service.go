@@ -457,9 +457,9 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 		result, execErr := s.coord.Execute(ctx, nreq, plan)
 		latency := time.Since(start)
 
-		score := 0
-		passed := 0
-		total := 1
+		score := 0.0
+		passed := 0.0
+		total := 1.0
 		evidence := ""
 		conf := 0.5
 
@@ -487,7 +487,7 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 			}
 			score, passed, total, evidence = test.eval(respText, latency)
 			if score > 0 {
-				conf = 0.6 + float64(score)*0.07
+				conf = 0.6 + (score/10.0)*0.35
 				if conf > 0.95 {
 					conf = 0.95
 				}
@@ -514,7 +514,7 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 		ModelID:      rec.ModelID,
 		Version:      rec.BenchmarkVersion,
 		Source:       SourceSelfAssess,
-		Capabilities: map[string]int{},
+		Capabilities: map[string]float64{},
 	}
 	if streamingKnown {
 		proposed.Properties.Streaming = boolPtr(true)
@@ -572,7 +572,7 @@ func finishAssessment(rec *AssessmentRecord, cats []AssessmentCategory) {
 type categoryTest struct {
 	prompt string
 	system string
-	eval   func(response string, latency time.Duration) (score, passed, total int, evidence string)
+	eval   func(response string, latency time.Duration) (score, passed, total float64, evidence string)
 }
 
 // categoryTests maps capability names to real test prompts that exercise each dimension.
@@ -631,35 +631,35 @@ var categoryTests = map[string]categoryTest{
 	},
 }
 
-func evalGeneral(resp string, lat time.Duration) (int, int, int, string) {
+func evalGeneral(resp string, lat time.Duration) (float64, float64, float64, string) {
 	length := len(resp)
 	if length < 20 {
 		return 1, 0, 1, "response too short"
 	}
 	if length > 200 {
-		return 4, 1, 1, fmt.Sprintf("good length (%d chars), coherent response", length)
+		return 8, 1, 1, fmt.Sprintf("good length (%d chars), coherent response", length)
 	}
-	return 3, 1, 1, fmt.Sprintf("adequate response (%d chars)", length)
+	return 6, 1, 1, fmt.Sprintf("adequate response (%d chars)", length)
 }
 
-func evalReasoning(resp string, lat time.Duration) (int, int, int, string) {
+func evalReasoning(resp string, lat time.Duration) (float64, float64, float64, string) {
 	low := strings.ToLower(resp)
 	if strings.Contains(low, "0.05") || strings.Contains(low, "5 cents") || strings.Contains(low, "5¢") || strings.Contains(low, "$0.05") {
 		if strings.Contains(low, "step") || strings.Contains(low, "because") || strings.Contains(low, "therefore") || strings.Contains(low, "so ") {
-			return 5, 2, 2, "correct answer with step-by-step reasoning"
+			return 10, 2, 2, "correct answer with step-by-step reasoning"
 		}
-		return 4, 1, 2, "correct answer but limited reasoning shown"
+		return 8, 1, 2, "correct answer but limited reasoning shown"
 	}
 	if strings.Contains(low, "10") || strings.Contains(low, "0.10") || strings.Contains(low, "ten") {
 		return 1, 0, 1, "gave common wrong answer (10 cents)"
 	}
 	if len(resp) > 50 {
-		return 2, 0, 1, "attempted reasoning but incorrect answer"
+		return 3, 0, 1, "attempted reasoning but incorrect answer"
 	}
 	return 1, 0, 1, "no meaningful reasoning"
 }
 
-func evalAnalysis(resp string, lat time.Duration) (int, int, int, string) {
+func evalAnalysis(resp string, lat time.Duration) (float64, float64, float64, string) {
 	low := strings.ToLower(resp)
 	hasRest := strings.Contains(low, "rest")
 	hasGraphql := strings.Contains(low, "graphql")
@@ -680,74 +680,74 @@ func evalAnalysis(resp string, lat time.Duration) (int, int, int, string) {
 		return 1, 0, 1, "did not discuss REST or GraphQL meaningfully"
 	}
 	if len(resp) < 80 {
-		return 2, 0, 1, "too brief for a comparison"
+		return 3, 0, 1, "too brief for a comparison"
 	}
 	if hasRest && hasGraphql && advantages >= 1 {
-		return 4, 2, 2, "good comparison covering both technologies"
+		return 8, 2, 2, "good comparison covering both technologies"
 	}
-	return 3, 1, 2, "adequate but shallow comparison"
+	return 6, 1, 2, "adequate but shallow comparison"
 }
 
-func evalCoding(resp string, lat time.Duration) (int, int, int, string) {
+func evalCoding(resp string, lat time.Duration) (float64, float64, float64, string) {
 	hasCodeBlock := strings.Contains(resp, "```")
 	hasDef := strings.Contains(resp, "def is_palindrome") || strings.Contains(resp, "def is_palindrome(")
 	hasReturn := strings.Contains(resp, "return") || strings.Contains(resp, "print")
 	if hasCodeBlock && hasDef && hasReturn {
-		return 5, 3, 3, "complete code with function definition and example"
+		return 10, 3, 3, "complete code with function definition and example"
 	}
 	if hasDef && hasReturn {
-		return 4, 2, 3, "function defined but missing code block formatting"
+		return 8, 2, 3, "function defined but missing code block formatting"
 	}
 	if strings.Contains(resp, "palindrome") && len(resp) > 60 {
-		return 3, 1, 3, "discussed palindrome but incomplete code"
+		return 6, 1, 3, "discussed palindrome but incomplete code"
 	}
 	if len(resp) < 30 {
 		return 1, 0, 3, "no meaningful code produced"
 	}
-	return 2, 1, 3, "partial or incorrect code"
+	return 3, 1, 3, "partial or incorrect code"
 }
 
-func evalWriting(resp string, lat time.Duration) (int, int, int, string) {
+func evalWriting(resp string, lat time.Duration) (float64, float64, float64, string) {
 	sentences := len(strings.Split(resp, "."))
 	words := len(strings.Fields(resp))
 	if words > 40 && sentences >= 3 {
-		return 5, 3, 3, "vivid, well-structured writing with sensory detail"
+		return 10, 3, 3, "vivid, well-structured writing with sensory detail"
 	}
 	if words > 20 && sentences >= 2 {
-		return 4, 2, 3, "adequate descriptive writing"
+		return 8, 2, 3, "adequate descriptive writing"
 	}
 	if words > 10 {
-		return 3, 1, 3, "minimal but on topic"
+		return 6, 1, 3, "minimal but on topic"
 	}
-	return 2, 0, 3, "too short, poor quality"
+	return 3, 0, 3, "too short, poor quality"
 }
 
-func evalToolUse(resp string, lat time.Duration) (int, int, int, string) {
+func evalToolUse(resp string, lat time.Duration) (float64, float64, float64, string) {
 	low := strings.ToLower(resp)
 	if strings.Contains(low, "yes") || strings.Contains(low, "function") || strings.Contains(low, "tool") {
 		if len(resp) > 30 {
-			return 4, 2, 2, "acknowledged tool use capability with details"
+			return 8, 2, 2, "acknowledged tool use capability with details"
 		}
-		return 3, 1, 2, "acknowledged tool use"
+		return 6, 1, 2, "acknowledged tool use"
 	}
-	return 2, 0, 2, "no clear indication of tool use support"
+	return 3, 0, 2, "no clear indication of tool use support"
 }
 
-func evalInstructionFollowing(resp string, lat time.Duration) (int, int, int, string) {
+func evalInstructionFollowing(resp string, lat time.Duration) (float64, float64, float64, string) {
 	trimmed := strings.TrimSpace(resp)
 	lowTrimmed := strings.ToLower(trimmed)
 	if lowTrimmed == "blue" || lowTrimmed == "\"blue\"" || lowTrimmed == "'blue'" || lowTrimmed == "blue." {
-		return 5, 1, 1, "perfectly followed instruction"
+		return 10, 1, 1, "perfectly followed instruction"
 	}
 	if strings.Contains(lowTrimmed, "blue") && len(trimmed) < 20 {
-		return 3, 0, 1, "contains 'blue' but added extra text"
+		return 6, 0, 1, "contains 'blue' but added extra text"
 	}
 	return 1, 0, 1, "did not follow instruction"
 }
 
 var jsonLike = regexp.MustCompile(`\{[^}]*\}`)
 
-func evalStructuredOutput(resp string, lat time.Duration) (int, int, int, string) {
+func evalStructuredOutput(resp string, lat time.Duration) (float64, float64, float64, string) {
 	matches := jsonLike.FindString(resp)
 	if matches == "" {
 		// Try to find JSON object
@@ -755,11 +755,11 @@ func evalStructuredOutput(resp string, lat time.Duration) (int, int, int, string
 	}
 	var parsed any
 	if err := json.Unmarshal([]byte(matches), &parsed); err != nil {
-		return 2, 0, 1, "response contains JSON-like structure but not valid JSON"
+		return 3, 0, 1, "response contains JSON-like structure but not valid JSON"
 	}
 	obj, ok := parsed.(map[string]any)
 	if !ok {
-		return 2, 0, 1, "response is valid JSON but not an object"
+		return 3, 0, 1, "response is valid JSON but not an object"
 	}
 	fields := 0
 	if _, ok := obj["name"]; ok {
@@ -775,23 +775,23 @@ func evalStructuredOutput(resp string, lat time.Duration) (int, int, int, string
 		fields++
 	}
 	if fields >= 4 {
-		return 5, 4, 4, "valid JSON with all required fields"
+		return 10, 4, 4, "valid JSON with all required fields"
 	}
-	return 3, fields, 4, fmt.Sprintf("valid JSON with %d/4 required fields", fields)
+	return 6, float64(fields), 4, fmt.Sprintf("valid JSON with %d/4 required fields", fields)
 }
 
-func evalLongContext(resp string, lat time.Duration) (int, int, int, string) {
+func evalLongContext(resp string, lat time.Duration) (float64, float64, float64, string) {
 	low := strings.ToLower(resp)
 	if len(resp) < 20 {
 		return 1, 0, 1, "response too short"
 	}
 	if strings.Contains(low, "pangram") || strings.Contains(low, "fox") || strings.Contains(low, "alphabet") || strings.Contains(low, "keyboard") || strings.Contains(low, "typeface") {
-		return 4, 2, 2, "accurately summarized the key points"
+		return 8, 2, 2, "accurately summarized the key points"
 	}
-	return 2, 0, 2, "summary missing key details"
+	return 3, 0, 2, "summary missing key details"
 }
 
-func evalMultilingual(resp string, lat time.Duration) (int, int, int, string) {
+func evalMultilingual(resp string, lat time.Duration) (float64, float64, float64, string) {
 	low := strings.ToLower(resp)
 	languages := 0
 	if strings.Contains(low, "bonjour") || strings.Contains(low, "merci") || strings.Contains(low, "au revoir") || strings.Contains(resp, "hello") {
@@ -814,29 +814,29 @@ func evalMultilingual(resp string, lat time.Duration) (int, int, int, string) {
 		langCount++
 	}
 	if languages >= 2 && langCount >= 2 {
-		return 5, 3, 3, "good multilingual response with translations"
+		return 10, 3, 3, "good multilingual response with translations"
 	}
 	if languages >= 1 || langCount >= 2 {
-		return 3, 1, 3, "partial multilingual response"
+		return 6, 1, 3, "partial multilingual response"
 	}
 	return 1, 0, 3, "no meaningful translation"
 }
 
-func evalMathematics(resp string, lat time.Duration) (int, int, int, string) {
+func evalMathematics(resp string, lat time.Duration) (float64, float64, float64, string) {
 	low := strings.ToLower(resp)
 	if strings.Contains(resp, "555") || strings.Contains(resp, "15*37") || strings.Contains(resp, "15 × 37") {
 		if strings.Contains(low, "step") || strings.Contains(low, "×") || strings.Contains(resp, "+") || strings.Contains(resp, "=") {
-			return 5, 2, 2, "correct answer with step-by-step work"
+			return 10, 2, 2, "correct answer with step-by-step work"
 		}
-		return 4, 1, 2, "correct answer but limited work shown"
+		return 8, 1, 2, "correct answer but limited work shown"
 	}
 	if len(resp) > 50 {
-		return 2, 0, 2, "attempted but incorrect answer"
+		return 3, 0, 2, "attempted but incorrect answer"
 	}
 	return 1, 0, 2, "no meaningful calculation"
 }
 
-func evalSummarization(resp string, lat time.Duration) (int, int, int, string) {
+func evalSummarization(resp string, lat time.Duration) (float64, float64, float64, string) {
 	low := strings.ToLower(resp)
 	if len(resp) < 30 {
 		return 1, 0, 1, "summary too short"
@@ -855,18 +855,18 @@ func evalSummarization(resp string, lat time.Duration) (int, int, int, string) {
 		keyPoints++
 	}
 	if keyPoints >= 3 {
-		return 5, 3, 3, "comprehensive summary covering key points"
+		return 10, 3, 3, "comprehensive summary covering key points"
 	}
 	if keyPoints >= 2 {
-		return 4, 2, 3, "good summary with some key points"
+		return 8, 2, 3, "good summary with some key points"
 	}
 	if keyPoints >= 1 {
-		return 3, 1, 3, "basic summary"
+		return 6, 1, 3, "basic summary"
 	}
-	return 2, 0, 3, "poor summary missing key information"
+	return 3, 0, 3, "poor summary missing key information"
 }
 
-func evalExtraction(resp string, lat time.Duration) (int, int, int, string) {
+func evalExtraction(resp string, lat time.Duration) (float64, float64, float64, string) {
 	emails := []string{"sales@example.com", "support@test.org", "partners@company.co.uk"}
 	found := 0
 	for _, e := range emails {
@@ -876,11 +876,11 @@ func evalExtraction(resp string, lat time.Duration) (int, int, int, string) {
 	}
 	switch found {
 	case 3:
-		return 5, 3, 3, "all email addresses correctly extracted"
+		return 10, 3, 3, "all email addresses correctly extracted"
 	case 2:
-		return 4, 2, 3, fmt.Sprintf("%d/3 email addresses found", found)
+		return 8, 2, 3, fmt.Sprintf("%d/3 email addresses found", found)
 	case 1:
-		return 3, 1, 3, fmt.Sprintf("only %d/3 email addresses found", found)
+		return 6, 1, 3, fmt.Sprintf("only %d/3 email addresses found", found)
 	default:
 		return 1, 0, 3, "no email addresses extracted"
 	}
@@ -940,7 +940,7 @@ func (s *ModelAssessmentService) GenerateProposal(assessmentID string, affectedR
 		ModelID:      rec.ModelID,
 		Version:      rec.BenchmarkVersion,
 		Source:       SourceSelfAssess,
-		Capabilities: map[string]int{},
+		Capabilities: map[string]float64{},
 		Properties:   current.Properties,
 	}
 
@@ -1118,21 +1118,21 @@ func ComputeConfidence(categories []AssessmentCategory, depth AssessmentDepth) f
 	return math.Min(avg, 1.0)
 }
 
-// ComputeCategoryScore maps a pass rate to a 0-5 score.
-func ComputeCategoryScore(passed, total int) int {
+// ComputeCategoryScore maps a pass rate to a 0-10 score.
+func ComputeCategoryScore(passed, total float64) float64 {
 	if total == 0 {
 		return 0
 	}
-	rate := float64(passed) / float64(total)
+	rate := passed / total
 	switch {
 	case rate >= 0.95:
-		return 5
+		return 10
 	case rate >= 0.80:
-		return 4
+		return 8
 	case rate >= 0.60:
-		return 3
+		return 6
 	case rate >= 0.30:
-		return 2
+		return 3
 	case rate >= 0.10:
 		return 1
 	default:

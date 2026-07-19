@@ -264,13 +264,13 @@ func TestListAssessments(t *testing.T) {
 
 func TestComputeCategoryScore(t *testing.T) {
 	tests := []struct {
-		passed, total int
-		expected      int
+		passed, total float64
+		expected      float64
 	}{
-		{10, 10, 5},
-		{8, 10, 4},
-		{6, 10, 3},
-		{3, 10, 2},
+		{10, 10, 10},
+		{8, 10, 8},
+		{6, 10, 6},
+		{3, 10, 3},
 		{1, 10, 1},
 		{0, 10, 0},
 		{0, 0, 0},
@@ -278,7 +278,7 @@ func TestComputeCategoryScore(t *testing.T) {
 	for _, tt := range tests {
 		got := ComputeCategoryScore(tt.passed, tt.total)
 		if got != tt.expected {
-			t.Errorf("ComputeCategoryScore(%d, %d) = %d, want %d", tt.passed, tt.total, got, tt.expected)
+			t.Errorf("ComputeCategoryScore(%g, %g) = %g, want %g", tt.passed, tt.total, got, tt.expected)
 		}
 	}
 }
@@ -357,8 +357,8 @@ func TestGenerateProposal(t *testing.T) {
 	rec.CompletedAt = &now
 	rec.Confidence = 0.85
 	rec.Categories = []AssessmentCategory{
-		{Name: CapGeneral, Score: 4, Confidence: 0.8, TestsPassed: 8, TestsTotal: 10},
-		{Name: CapCoding, Score: 5, Confidence: 0.9, TestsPassed: 10, TestsTotal: 10},
+		{Name: CapGeneral, Score: 8, Confidence: 0.8, TestsPassed: 8, TestsTotal: 10},
+		{Name: CapCoding, Score: 10, Confidence: 0.9, TestsPassed: 10, TestsTotal: 10},
 	}
 	store.UpdateAssessment(nil, rec)
 
@@ -375,11 +375,11 @@ func TestGenerateProposal(t *testing.T) {
 	if len(prop.Differences) == 0 && (prop.CurrentProfile.Capabilities[CapGeneral] != 0 || prop.ProposedProfile.Capabilities[CapGeneral] != 4) {
 		// the differences might exist or not depending on current profile
 	}
-	if prop.ProposedProfile.Capabilities[CapGeneral] != 4 {
-		t.Errorf("expected general score 4, got %d", prop.ProposedProfile.Capabilities[CapGeneral])
+	if prop.ProposedProfile.Capabilities[CapGeneral] != 8 {
+		t.Errorf("expected general score 8, got %g", prop.ProposedProfile.Capabilities[CapGeneral])
 	}
-	if prop.ProposedProfile.Capabilities[CapCoding] != 5 {
-		t.Errorf("expected coding score 5, got %d", prop.ProposedProfile.Capabilities[CapCoding])
+	if prop.ProposedProfile.Capabilities[CapCoding] != 10 {
+		t.Errorf("expected coding score 10, got %g", prop.ProposedProfile.Capabilities[CapCoding])
 	}
 	if len(prop.AffectedRoutes) != 1 || prop.AffectedRoutes[0] != "auto-coding" {
 		t.Errorf("expected affected route auto-coding, got %v", prop.AffectedRoutes)
@@ -410,7 +410,7 @@ func TestApplyProposal(t *testing.T) {
 		ModelID:    "gpt-4o",
 		Version:    BenchmarkPackVersion,
 		Source:     SourceSelfAssess,
-		Capabilities: map[string]int{
+		Capabilities: map[string]float64{
 			CapGeneral: 4,
 			CapCoding:  5,
 		},
@@ -456,13 +456,13 @@ func TestProfileStoreResolve_WithAssessments(t *testing.T) {
 	userProfiles := map[string]ModelProfile{
 		"openai/gpt-4o": {
 			ID: "openai/gpt-4o", Source: SourceUser,
-			Capabilities: map[string]int{CapGeneral: 5},
+			Capabilities: map[string]float64{CapGeneral: 5},
 		},
 	}
 	assessProfiles := map[string]ModelProfile{
 		"openai/gpt-4o": {
 			ID: "openai/gpt-4o", Source: SourceSelfAssess,
-			Capabilities: map[string]int{CapGeneral: 4, CapCoding: 4},
+			Capabilities: map[string]float64{CapGeneral: 4, CapCoding: 4},
 		},
 	}
 	ps := NewProfileStoreWithAssessments(userProfiles, assessProfiles, true)
@@ -474,7 +474,7 @@ func TestProfileStoreResolve_WithAssessments(t *testing.T) {
 		t.Errorf("expected user source (highest precedence), got %s", prof.Source)
 	}
 	if prof.Capabilities[CapGeneral] != 5 {
-		t.Errorf("expected general 5 from user override, got %d", prof.Capabilities[CapGeneral])
+		t.Errorf("expected general 5 from user override, got %g", prof.Capabilities[CapGeneral])
 	}
 }
 
@@ -482,7 +482,7 @@ func TestProfileStoreResolve_AssessmentBaseline(t *testing.T) {
 	assessProfiles := map[string]ModelProfile{
 		"openai/gpt-4o": {
 			ID: "openai/gpt-4o", Source: SourceSelfAssess,
-			Capabilities: map[string]int{CapGeneral: 4, CapCoding: 4},
+			Capabilities: map[string]float64{CapGeneral: 4, CapCoding: 4},
 		},
 	}
 	ps := NewProfileStoreWithAssessments(nil, assessProfiles, true)
@@ -494,7 +494,7 @@ func TestProfileStoreResolve_AssessmentBaseline(t *testing.T) {
 		t.Errorf("expected self-assessment source, got %s", prof.Source)
 	}
 	if prof.Capabilities[CapGeneral] != 4 {
-		t.Errorf("expected general 4, got %d", prof.Capabilities[CapGeneral])
+		t.Errorf("expected general 4, got %g", prof.Capabilities[CapGeneral])
 	}
 }
 
@@ -549,7 +549,7 @@ func TestToFromStorage(t *testing.T) {
 		},
 		ProposedProfile: &ModelProfile{
 			ID: "openai/gpt-4o", Source: SourceSelfAssess,
-			Capabilities: map[string]int{CapGeneral: 4},
+			Capabilities: map[string]float64{CapGeneral: 4},
 		},
 		AppliedFields: []string{CapGeneral},
 	}
@@ -576,6 +576,6 @@ func TestToFromStorage(t *testing.T) {
 		t.Fatal("expected non-nil proposed profile")
 	}
 	if restored.ProposedProfile.Capabilities[CapGeneral] != 4 {
-		t.Errorf("expected general 4, got %d", restored.ProposedProfile.Capabilities[CapGeneral])
+		t.Errorf("expected general 4, got %g", restored.ProposedProfile.Capabilities[CapGeneral])
 	}
 }

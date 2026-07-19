@@ -8,7 +8,7 @@ func TestBuiltinLookup(t *testing.T) {
 		t.Fatal("missing builtin")
 	}
 	if p.Cap(CapCoding) < 4 {
-		t.Fatalf("coding=%d", p.Cap(CapCoding))
+		t.Fatalf("coding=%g", p.Cap(CapCoding))
 	}
 }
 
@@ -16,7 +16,7 @@ func TestUserOverridePrecedence(t *testing.T) {
 	user := map[string]ModelProfile{
 		"deepseek/deepseek-chat": {
 			ID: "deepseek/deepseek-chat", Source: SourceUser,
-			Capabilities: map[string]int{CapCoding: 1},
+			Capabilities: map[string]float64{CapCoding: 1},
 			Properties:   ModelProperties{CostTier: 5},
 		},
 	}
@@ -29,12 +29,12 @@ func TestUserOverridePrecedence(t *testing.T) {
 		t.Fatalf("source=%s", p.Source)
 	}
 	if p.Cap(CapCoding) != 1 {
-		t.Fatalf("override not applied: %d", p.Cap(CapCoding))
+		t.Fatalf("override not applied: %g", p.Cap(CapCoding))
 	}
 }
 
 func TestValidateProfile(t *testing.T) {
-	err := ValidateProfile(ModelProfile{Capabilities: map[string]int{CapCoding: 9}})
+	err := ValidateProfile(ModelProfile{Capabilities: map[string]float64{CapCoding: 11}})
 	if err == nil {
 		t.Fatal("expected error")
 	}

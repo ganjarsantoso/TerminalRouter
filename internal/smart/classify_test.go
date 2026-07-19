@@ -11,8 +11,8 @@ func TestClassifyCodingDebug(t *testing.T) {
 	if task.PrimaryType != TypeCodingDebug {
 		t.Fatalf("primary=%s want coding_debug", task.PrimaryType)
 	}
-	if task.Requirements[CapCoding] < 4 {
-		t.Fatalf("coding req=%d", task.Requirements[CapCoding])
+	if task.Requirements[CapCoding] < 8 {
+		t.Fatalf("coding req=%g", task.Requirements[CapCoding])
 	}
 	if task.Confidence < 0.5 {
 		t.Fatalf("confidence too low: %f", task.Confidence)

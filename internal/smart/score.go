@@ -77,7 +77,7 @@ func ScoreCandidate(profile ModelProfile, task TaskProfile, policy Policy, order
 }
 
 // capabilityMatch compares required levels with profile; excess unused capability is not rewarded.
-func capabilityMatch(req map[string]int, profile ModelProfile) float64 {
+func capabilityMatch(req map[string]float64, profile ModelProfile) float64 {
 	if len(req) == 0 {
 		return 0.7
 	}
@@ -111,15 +111,15 @@ func capabilityMatch(req map[string]int, profile ModelProfile) float64 {
 	return scoreSum / weightSum
 }
 
-func specializationMatch(req map[string]int, profile ModelProfile) float64 {
+func specializationMatch(req map[string]float64, profile ModelProfile) float64 {
 	// Focus on highest task requirements among specialized dims
 	type pair struct {
 		cap  string
-		need int
+		need float64
 	}
 	var top []pair
 	for _, cap := range specializedCaps {
-		if n := req[cap]; n >= 3 {
+		if n := req[cap]; n >= 6 {
 			top = append(top, pair{cap, n})
 		}
 	}
@@ -133,9 +133,9 @@ func specializationMatch(req map[string]int, profile ModelProfile) float64 {
 			sum += 0.3
 			continue
 		}
-		r := float64(have) / 5.0
+		r := float64(have) / 10.0
 		// weight by how much the task needs it
-		sum += r * (float64(p.need) / 5.0)
+		sum += r * (float64(p.need) / 10.0)
 	}
 	return sum / float64(len(top))
 }
@@ -154,7 +154,7 @@ func qualityScore(profile ModelProfile) float64 {
 	if n == 0 {
 		return 0.5
 	}
-	return (sum / n) / 5.0
+	return (sum / n) / 10.0
 }
 
 func costPreference(tier int) float64 {
@@ -179,7 +179,7 @@ func uncertaintyPenalty(profile ModelProfile, task TaskProfile) float64 {
 	}
 	pen := 0.0
 	for cap, need := range task.Requirements {
-		if need >= 3 && profile.Cap(cap) == 0 {
+		if need >= 6 && profile.Cap(cap) == 0 {
 			pen += 0.02
 		}
 	}
@@ -191,16 +191,16 @@ func uncertaintyPenalty(profile ModelProfile, task TaskProfile) float64 {
 
 func buildScoreReasons(profile ModelProfile, task TaskProfile, taskMatch, spec, cost, lat float64) []string {
 	var reasons []string
-	if task.Requirements[CapCoding] >= 4 && profile.Cap(CapCoding) >= 4 {
+	if task.Requirements[CapCoding] >= 8 && profile.Cap(CapCoding) >= 8 {
 		reasons = append(reasons, "strong coding profile")
 	}
-	if task.Requirements[CapReasoning] >= 4 && profile.Cap(CapReasoning) >= 4 {
+	if task.Requirements[CapReasoning] >= 8 && profile.Cap(CapReasoning) >= 8 {
 		reasons = append(reasons, "strong reasoning match")
 	}
-	if task.Requirements[CapAnalysis] >= 4 && profile.Cap(CapAnalysis) >= 4 {
+	if task.Requirements[CapAnalysis] >= 8 && profile.Cap(CapAnalysis) >= 8 {
 		reasons = append(reasons, "strong analysis match")
 	}
-	if task.Requirements[CapToolUse] >= 3 && profile.Cap(CapToolUse) >= 4 {
+	if task.Requirements[CapToolUse] >= 6 && profile.Cap(CapToolUse) >= 8 {
 		reasons = append(reasons, "strong tool-use profile")
 	}
 	if profile.Properties.CostTier > 0 && profile.Properties.CostTier <= 2 {

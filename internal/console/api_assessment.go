@@ -248,7 +248,7 @@ func (s *Server) handleApplyAssessmentProposal(w http.ResponseWriter, r *http.Re
 			}
 			mp := cfg.ModelProfiles[key]
 			if mp.Capabilities == nil {
-				mp.Capabilities = map[string]int{}
+				mp.Capabilities = map[string]float64{}
 			}
 			applyAll := len(accepted) == 0
 			for k, v := range rec.ProposedProfile.Capabilities {

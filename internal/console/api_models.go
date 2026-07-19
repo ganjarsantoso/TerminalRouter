@@ -125,7 +125,7 @@ func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Capabilities map[string]int             `json:"capabilities"`
+		Capabilities map[string]float64         `json:"capabilities"`
 		Properties   config.ModelPropertiesConfig `json:"properties"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -138,7 +138,7 @@ func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 		}
 		mp := cfg.ModelProfiles[id]
 		if mp.Capabilities == nil && body.Capabilities != nil {
-			mp.Capabilities = map[string]int{}
+			mp.Capabilities = map[string]float64{}
 		}
 		for k, v := range body.Capabilities {
 			mp.Capabilities[k] = v

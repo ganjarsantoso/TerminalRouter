@@ -11,8 +11,8 @@ func testEngine() *Engine {
 		"local/qwen-coder": {
 			ID: "local/qwen-coder", Source: SourceUser,
 			ProviderID: "local", ModelID: "qwen-coder",
-			Capabilities: map[string]int{
-				CapGeneral: 3, CapCoding: 5, CapReasoning: 4, CapAnalysis: 3, CapToolUse: 4,
+			Capabilities: map[string]float64{
+				CapGeneral: 6, CapCoding: 10, CapReasoning: 8, CapAnalysis: 6, CapToolUse: 8,
 			},
 			Properties: ModelProperties{
 				Tools: boolPtr(true), Vision: boolPtr(false),
@@ -22,8 +22,8 @@ func testEngine() *Engine {
 		"deepseek/deepseek-chat": {
 			ID: "deepseek/deepseek-chat", Source: SourceUser,
 			ProviderID: "deepseek", ModelID: "deepseek-chat",
-			Capabilities: map[string]int{
-				CapGeneral: 4, CapCoding: 5, CapReasoning: 4, CapAnalysis: 4, CapToolUse: 4,
+			Capabilities: map[string]float64{
+				CapGeneral: 8, CapCoding: 10, CapReasoning: 8, CapAnalysis: 8, CapToolUse: 8,
 			},
 			Properties: ModelProperties{
 				Tools: boolPtr(true), Vision: boolPtr(false),
@@ -33,8 +33,8 @@ func testEngine() *Engine {
 		"anthropic-main/claude-sonnet": {
 			ID: "anthropic-main/claude-sonnet", Source: SourceUser,
 			ProviderID: "anthropic-main", ModelID: "claude-sonnet",
-			Capabilities: map[string]int{
-				CapGeneral: 5, CapCoding: 5, CapReasoning: 5, CapAnalysis: 5, CapToolUse: 5,
+			Capabilities: map[string]float64{
+				CapGeneral: 10, CapCoding: 10, CapReasoning: 10, CapAnalysis: 10, CapToolUse: 10,
 			},
 			Properties: ModelProperties{
 				Tools: boolPtr(true), Vision: boolPtr(true),
@@ -44,8 +44,8 @@ func testEngine() *Engine {
 		"openai-main/reasoning-model": {
 			ID: "openai-main/reasoning-model", Source: SourceUser,
 			ProviderID: "openai-main", ModelID: "reasoning-model",
-			Capabilities: map[string]int{
-				CapGeneral: 4, CapCoding: 5, CapReasoning: 5, CapAnalysis: 5, CapToolUse: 2,
+			Capabilities: map[string]float64{
+				CapGeneral: 8, CapCoding: 10, CapReasoning: 10, CapAnalysis: 10, CapToolUse: 4,
 			},
 			Properties: ModelProperties{
 				Tools: boolPtr(false), Vision: boolPtr(true),
@@ -276,7 +276,7 @@ func TestMinimumTaskMatchFloor(t *testing.T) {
 	// tiny weak profile
 	eng.Profiles.User["local/small"] = ModelProfile{
 		ID: "local/small", ProviderID: "local", ModelID: "small", Source: SourceUser,
-		Capabilities: map[string]int{CapGeneral: 1, CapCoding: 1, CapReasoning: 1},
+		Capabilities: map[string]float64{CapGeneral: 1, CapCoding: 1, CapReasoning: 1},
 		Properties:   ModelProperties{Tools: boolPtr(false), CostTier: 1, LatencyTier: 1, Privacy: PrivacyLocal, ContextWindow: 4096},
 	}
 	rc := RouteConfig{
