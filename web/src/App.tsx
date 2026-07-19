@@ -1641,7 +1641,7 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
     try {
       await apiCall(`${API_BASE}/model-assessments/${assessId}/apply`, 'POST', {
         accepted_fields: acceptedFields || [],
-        preserve_user_overrides: true
+        preserve_user_overrides: false
       });
       toastSuccess('Assessment proposal applied');
       setAssessView('none');
