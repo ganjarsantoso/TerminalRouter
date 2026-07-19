@@ -1659,14 +1659,18 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
     setAssessEstimate(null);
   };
 
-  // Compile full catalog of configured or discovered models
+  // Compile full catalog of configured models (provider/model format)
   const configuredModels = new Set<string>();
   Object.values(config.routes || {}).forEach((r: any) => {
-    (r.targets || []).forEach((t: any) => configuredModels.add(t.model));
-    (r.candidates || []).forEach((t: any) => configuredModels.add(t.model));
+    (r.targets || []).forEach((t: any) => {
+      if (t.provider && t.model) configuredModels.add(`${t.provider}/${t.model}`);
+    });
+    (r.candidates || []).forEach((t: any) => {
+      if (t.provider && t.model) configuredModels.add(`${t.provider}/${t.model}`);
+    });
   });
   Object.values(config.aliases || {}).forEach((a: any) => {
-    if (a.model) configuredModels.add(a.model);
+    if (a.provider && a.model) configuredModels.add(`${a.provider}/${a.model}`);
   });
   
   const allModels = Array.from(configuredModels).sort();
