@@ -62,6 +62,9 @@ func (s *Server) mountAPI(mux *http.ServeMux) {
 	mut("POST /admin/v1/routes/{id}/validate", s.handleValidateRoute)
 	mut("POST /admin/v1/routes/{id}/test", s.handleTestRoute)
 
+	// Playground — real completion via admin session
+	mut("POST /admin/v1/playground", s.handlePlayground)
+
 	// Smart routes
 	get("GET /admin/v1/smart/status", s.handleSmartStatus)
 	mut("POST /admin/v1/smart/classify", s.handleSmartClassify)

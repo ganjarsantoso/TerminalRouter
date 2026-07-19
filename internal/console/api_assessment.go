@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/termrouter/termrouter/internal/config"
 	"github.com/termrouter/termrouter/internal/smart"
 )
 
@@ -173,21 +174,30 @@ func (s *Server) handleGetAssessmentProposal(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, "service_error", "cannot initialize assessment service")
 		return
 	}
-	// Find affected routes
-	rc, err := s.loadConfig()
+	rec, err := svc.GetAssessment(aid)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	// Find smart routes that include this provider/model as a candidate.
+	rc, loadErr := s.loadConfig()
 	affected := []string{}
-	if err == nil && rc != nil {
+	if loadErr == nil && rc != nil {
+		targetKey := smart.ProfileKey(rec.ProviderID, rec.ModelID)
 		for name, route := range rc.Cfg.Routes {
-			if strings.ToLower(route.Strategy) == "smart" {
-				for _, c := range route.Candidates {
-					svc := s.getAssessmentService()
-					if svc != nil {
-						_ = svc
-					}
-					_ = c
+			if strings.ToLower(route.Strategy) != "smart" && route.Smart == nil && len(route.Candidates) == 0 {
+				continue
+			}
+			for _, c := range route.Candidates {
+				if c.Provider == rec.ProviderID && c.Model == rec.ModelID {
+					affected = append(affected, name)
+					break
+				}
+				if smart.ProfileKey(c.Provider, c.Model) == targetKey {
+					affected = append(affected, name)
+					break
 				}
 			}
-			_ = name
 		}
 	}
 	prop, err := svc.GenerateProposal(aid, affected)
@@ -214,6 +224,78 @@ func (s *Server) handleApplyAssessmentProposal(w http.ResponseWriter, r *http.Re
 	rec, err := svc.ApplyProposal(aid, body.AcceptedFields, body.PreserveUserOverrides)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "apply_error", err.Error())
+		return
+	}
+	// Persist accepted profile fields into config.yaml (same as CLI apply).
+	if rec.ProposedProfile != nil {
+		key := smart.ProfileKey(rec.ProviderID, rec.ModelID)
+		accepted := body.AcceptedFields
+		preserve := body.PreserveUserOverrides
+		rev, mutErr := s.applyMutation("profile_assessment_apply", key, func(cfg *config.Config) error {
+			if cfg.ModelProfiles == nil {
+				cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
+			}
+			mp := cfg.ModelProfiles[key]
+			if mp.Capabilities == nil {
+				mp.Capabilities = map[string]int{}
+			}
+			applyAll := len(accepted) == 0
+			for k, v := range rec.ProposedProfile.Capabilities {
+				if applyAll || containsString(accepted, k) {
+					if preserve && mp.Source == smart.SourceUser {
+						if _, exists := mp.Capabilities[k]; exists {
+							continue
+						}
+					}
+					mp.Capabilities[k] = v
+				}
+			}
+			if rec.ProposedProfile.Properties.ContextWindow > 0 {
+				mp.Properties.ContextWindow = rec.ProposedProfile.Properties.ContextWindow
+			}
+			if rec.ProposedProfile.Properties.MaxOutputTokens > 0 {
+				mp.Properties.MaxOutputTokens = rec.ProposedProfile.Properties.MaxOutputTokens
+			}
+			if rec.ProposedProfile.Properties.CostTier > 0 {
+				mp.Properties.CostTier = rec.ProposedProfile.Properties.CostTier
+			}
+			if rec.ProposedProfile.Properties.LatencyTier > 0 {
+				mp.Properties.LatencyTier = rec.ProposedProfile.Properties.LatencyTier
+			}
+			if rec.ProposedProfile.Properties.Privacy != "" {
+				mp.Properties.Privacy = rec.ProposedProfile.Properties.Privacy
+			}
+			if rec.ProposedProfile.Properties.Vision != nil {
+				mp.Properties.Vision = rec.ProposedProfile.Properties.Vision
+			}
+			if rec.ProposedProfile.Properties.Tools != nil {
+				mp.Properties.Tools = rec.ProposedProfile.Properties.Tools
+			}
+			if rec.ProposedProfile.Properties.ParallelTools != nil {
+				mp.Properties.ParallelTools = rec.ProposedProfile.Properties.ParallelTools
+			}
+			if rec.ProposedProfile.Properties.StructuredOutput != nil {
+				mp.Properties.StructuredOutput = rec.ProposedProfile.Properties.StructuredOutput
+			}
+			if rec.ProposedProfile.Properties.Streaming != nil {
+				mp.Properties.Streaming = rec.ProposedProfile.Properties.Streaming
+			}
+			mp.Source = smart.SourceSelfAssess
+			mp.Version = rec.BenchmarkVersion
+			cfg.ModelProfiles[key] = mp
+			return nil
+		})
+		if mutErr != nil {
+			writeError(w, http.StatusBadRequest, "save_error", mutErr.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"assessment_id": aid,
+			"status":        rec.Status,
+			"applied_at":    rec.AppliedAt,
+			"revision":      rev,
+			"profile":       key,
+		})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

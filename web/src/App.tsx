@@ -1084,7 +1084,7 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
 function OverviewTab({ config, providerHealth, usageSummary, activities, diagnostics, setCurrentTab }: any) {
   const providersCount = Object.keys(config.providers || {}).length;
 
-  const unifiedRoutes = buildUnifiedRoutes(config, {});
+  const unifiedRoutes = buildUnifiedRoutes(config, providerHealth);
   const singleCount = unifiedRoutes.filter((r: any) => r.mode === 'single').length;
   const fallbackCount = unifiedRoutes.filter((r: any) => r.mode === 'fallback').length;
   const smartCount = unifiedRoutes.filter((r: any) => r.mode === 'smart').length;
@@ -1395,7 +1395,7 @@ function ProvidersTab({ config, providerHealth, discoveredModels, apiCall, fetch
           const health = providerHealth[pName] || {};
           const isEnabled = p.enabled !== false;
           const status = !isEnabled ? 'disabled' : (health.circuit === 'open' ? 'open' : 'healthy');
-          const myModels = discoveredModels?.filter((m: any) => m.provider_id === pName) || [];
+          const myModels = discoveredModels?.filter((m: any) => m.provider === pName || m.provider_id === pName) || [];
 
           return (
             <div key={pName} className="glass-panel rounded-2xl border border-zinc-800 p-6 space-y-4 flex flex-col justify-between shadow-lg relative overflow-hidden">
@@ -1413,7 +1413,7 @@ function ProvidersTab({ config, providerHealth, discoveredModels, apiCall, fetch
 
                 <div className="space-y-1 text-xs">
                   <div className="flex justify-between"><span className="text-zinc-500">Endpoint:</span> <span className="font-mono text-zinc-300 max-w-[200px] truncate">{p.base_url}</span></div>
-                  <div className="flex justify-between"><span className="text-zinc-500">Credential Ref:</span> <span className="font-mono text-zinc-300">{p.credential?.source || 'None'}</span></div>
+                  <div className="flex justify-between"><span className="text-zinc-500">Credential Ref:</span> <span className="font-mono text-zinc-300">{p.credential_ref || p.credential?.source || p.credential?.ref || 'None'}</span></div>
                   <div className="flex justify-between">
                     <span className="text-zinc-500">Circuit State:</span> 
                     <span className={`font-semibold uppercase ${status === 'healthy' ? 'text-emerald-400' : (status === 'open' ? 'text-rose-400 animate-pulse' : 'text-zinc-500')}`}>{status}</span>
@@ -1430,7 +1430,7 @@ function ProvidersTab({ config, providerHealth, discoveredModels, apiCall, fetch
                     <span className="text-[10px] text-zinc-500 uppercase font-semibold">Discovered Models ({myModels.length}):</span>
                     <div className="flex flex-wrap gap-1 mt-1 max-h-16 overflow-y-auto">
                       {myModels.map((m: any) => (
-                        <span key={m.model_id} className="text-[9px] bg-zinc-900 text-zinc-400 border border-zinc-850 px-1.5 py-0.5 rounded font-mono">{m.model_id}</span>
+                        <span key={m.model || m.model_id || m.id} className="text-[9px] bg-zinc-900 text-zinc-400 border border-zinc-850 px-1.5 py-0.5 rounded font-mono">{m.model || m.model_id}</span>
                       ))}
                     </div>
                   </div>
@@ -1858,6 +1858,12 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
                     <div className="flex justify-between"><span>Model</span><span className="font-mono text-zinc-200">{assessProposal.provider_id}/{assessProposal.model_id}</span></div>
                     <div className="flex justify-between"><span>Benchmark</span><span className="font-mono text-zinc-200">{assessProposal.benchmark_version}</span></div>
                     <div className="flex justify-between"><span>Overall Confidence</span><span className="font-semibold text-indigo-400">{(assessProposal.overall_confidence * 100).toFixed(0)}%</span></div>
+                    {assessProposal.affected_routes?.length > 0 && (
+                      <div className="flex justify-between gap-2">
+                        <span>Affected routes</span>
+                        <span className="font-mono text-zinc-200 text-right">{assessProposal.affected_routes.join(', ')}</span>
+                      </div>
+                    )}
                   </div>
 
                   {assessProposal.differences?.length > 0 ? (
@@ -2048,7 +2054,8 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
   const [editingRoute, setEditingRoute] = useState<any | null>(null);
   const [candidateTests, setCandidateTests] = useState<Record<string, { loading: boolean; ok?: boolean; error?: string }>>({});
 
-  const [shadowReports] = useState<any>({});
+  const [shadowReports, setShadowReports] = useState<any>(null);
+  const [showShadowReports, setShowShadowReports] = useState(false);
 
   const [filterMode, setFilterMode] = useState('all');
 
@@ -2061,8 +2068,20 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
     }
   }, [config]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await apiCall(`${API_BASE}/smart/reports`);
+        if (!cancelled) setShadowReports(data.report || data);
+      } catch (_) {
+        if (!cancelled) setShadowReports(null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [config, apiCall]);
+
   const unifiedRoutes = buildUnifiedRoutes(config, providerHealth);
-  const unusedShadowRef = shadowReports; void unusedShadowRef;
   const unassignedRoutes = Object.entries(config.routes || {}).filter(([rName]: any) => {
     return !Object.values(config.aliases || {}).some((a: any) => a.route === rName);
   });
@@ -2467,9 +2486,9 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
                         'bg-zinc-800/50 text-zinc-500 border-zinc-800 hover:bg-zinc-800'
                       }`}
                       title={candidateTests[`sc-${idx}`]?.error || (candidateTests[`sc-${idx}`]?.ok ? 'Model reachable' : 'Test candidate')}>
-                      {candidateTests[idx]?.loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> :
-                       candidateTests[idx]?.ok === true ? <CheckCircle className="h-3.5 w-3.5" /> :
-                       candidateTests[idx]?.ok === false ? <XCircle className="h-3.5 w-3.5" /> :
+                      {candidateTests[`sc-${idx}`]?.loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> :
+                       candidateTests[`sc-${idx}`]?.ok === true ? <CheckCircle className="h-3.5 w-3.5" /> :
+                       candidateTests[`sc-${idx}`]?.ok === false ? <XCircle className="h-3.5 w-3.5" /> :
                        <Play className="h-3.5 w-3.5" />}
                     </button>
                     {smartCandidates.length > 1 && (
@@ -2583,18 +2602,80 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
         </div>
       )}
 
-      {/* Filter tabs */}
-      <div className="flex items-center gap-2 text-xs">
-        {['all', 'single', 'fallback', 'smart'].map(m => (
-          <button 
-            key={m} 
-            onClick={() => setFilterMode(m)}
-            className={`px-3 py-1.5 rounded-lg border font-semibold transition-colors ${filterMode === m ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'}`}
-          >
-            {m === 'all' ? 'All' : m === 'single' ? 'Single Model' : m.charAt(0).toUpperCase() + m.slice(1)}
-          </button>
-        ))}
+      {/* Filter tabs + shadow reports toggle */}
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <div className="flex items-center gap-2">
+          {['all', 'single', 'fallback', 'smart'].map(m => (
+            <button 
+              key={m} 
+              onClick={() => setFilterMode(m)}
+              className={`px-3 py-1.5 rounded-lg border font-semibold transition-colors ${filterMode === m ? 'bg-indigo-600 text-white border-indigo-500' : 'bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200'}`}
+            >
+              {m === 'all' ? 'All' : m === 'single' ? 'Single Model' : m.charAt(0).toUpperCase() + m.slice(1)}
+            </button>
+          ))}
+        </div>
+        <label className="flex items-center gap-2 text-zinc-400 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={showShadowReports}
+            onChange={(e) => setShowShadowReports(e.target.checked)}
+            className="rounded bg-zinc-900 border-zinc-800"
+          />
+          Show shadow reports (7d)
+        </label>
       </div>
+
+      {showShadowReports && (
+        <div className="glass-panel rounded-2xl border border-zinc-800 p-5 space-y-3">
+          <h4 className="text-sm font-bold text-zinc-300">Smart Shadow Report (last 7 days)</h4>
+          {!shadowReports ? (
+            <p className="text-xs text-zinc-500">No shadow decision data yet, or reports could not be loaded.</p>
+          ) : (
+            <div className="grid grid-cols-4 gap-4 text-xs">
+              <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-3">
+                <div className="text-zinc-500 uppercase tracking-wider text-[10px]">Decisions</div>
+                <div className="text-lg font-bold text-zinc-100 mt-1">{shadowReports.Total ?? shadowReports.total ?? 0}</div>
+              </div>
+              <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-3">
+                <div className="text-zinc-500 uppercase tracking-wider text-[10px]">Uncertain</div>
+                <div className="text-lg font-bold text-amber-400 mt-1">{shadowReports.UncertainCount ?? shadowReports.uncertain_count ?? 0}</div>
+              </div>
+              <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-3">
+                <div className="text-zinc-500 uppercase tracking-wider text-[10px]">Match actual</div>
+                <div className="text-lg font-bold text-emerald-400 mt-1">{shadowReports.MatchActualCount ?? shadowReports.match_actual_count ?? 0}</div>
+              </div>
+              <div className="bg-zinc-900/40 border border-zinc-800 rounded-xl p-3">
+                <div className="text-zinc-500 uppercase tracking-wider text-[10px]">Top task types</div>
+                <div className="mt-1 space-y-0.5 max-h-16 overflow-y-auto font-mono text-[10px] text-zinc-300">
+                  {Object.entries(shadowReports.ByTaskType || shadowReports.by_task_type || {}).length === 0 ? (
+                    <span className="text-zinc-500">—</span>
+                  ) : (
+                    Object.entries(shadowReports.ByTaskType || shadowReports.by_task_type || {})
+                      .sort((a: any, b: any) => (b[1] as number) - (a[1] as number))
+                      .slice(0, 4)
+                      .map(([k, v]: any) => (
+                        <div key={k} className="flex justify-between gap-2"><span>{k}</span><span>{v}</span></div>
+                      ))
+                  )}
+                </div>
+              </div>
+              {Object.keys(shadowReports.ByRecommendation || shadowReports.by_recommendation || {}).length > 0 && (
+                <div className="col-span-4 bg-zinc-900/40 border border-zinc-800 rounded-xl p-3">
+                  <div className="text-zinc-500 uppercase tracking-wider text-[10px] mb-2">Recommendations</div>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(shadowReports.ByRecommendation || shadowReports.by_recommendation || {})
+                      .sort((a: any, b: any) => (b[1] as number) - (a[1] as number))
+                      .map(([k, v]: any) => (
+                        <span key={k} className="bg-zinc-800 text-zinc-300 px-2 py-1 rounded font-mono text-[10px]">{k}: {v as number}</span>
+                      ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Route table */}
       <div className="glass-panel rounded-2xl border border-zinc-800 shadow-lg overflow-hidden">
@@ -2998,7 +3079,7 @@ function KeysTab({ clientKeys, apiCall, fetchKeys, toastSuccess, config }: any) 
                 clientKeys.map((k: any) => (
                   <tr key={k.id} className="hover:bg-zinc-900/30">
                     <td className="py-4 font-bold text-zinc-200">{k.name}</td>
-                    <td className="py-4 font-mono text-zinc-400">{k.key_prefix || 'tr_live_...'}</td>
+                    <td className="py-4 font-mono text-zinc-400">{k.prefix || k.key_prefix || 'tr_live_...'}</td>
                     <td className="py-4">
                       {k.allowed_aliases && k.allowed_aliases.length > 0 ? (
                         <div className="flex gap-1 flex-wrap">
@@ -3058,8 +3139,8 @@ function PlaygroundTab({ config, apiCall }: any) {
 
   useEffect(() => {
     const routes = buildUnifiedRoutes(config, {});
-    if (routes.length > 0) setSelectedAlias(routes[0].name);
-  }, [config]);
+    if (routes.length > 0 && !selectedAlias) setSelectedAlias(routes[0].name);
+  }, [config, selectedAlias]);
 
   const handleSend = async () => {
     if (!selectedAlias || !prompt.trim()) return;
@@ -3080,12 +3161,15 @@ function PlaygroundTab({ config, apiCall }: any) {
         stream
       };
 
-      // Since we don't store plaintext client keys on the server, the admin console session itself can request playground runs.
-      // We route this through our custom admin playground API that executes the query using the configured resolver.
-      const res = await apiCall(`${API_BASE}/routes/${selectedAlias}/test`, 'POST', payload);
-      setLatency(Date.now() - start);
+      // Admin session playground — real inference via POST /admin/v1/playground
+      const res = await apiCall(`${API_BASE}/playground`, 'POST', payload);
+      setLatency(res.latency_ms ?? (Date.now() - start));
       setResponse(res.response || JSON.stringify(res, null, 2));
-      setDecision(res.decision);
+      setDecision(res.decision || {
+        selected_provider: res.provider,
+        selected_model: res.upstream_model,
+        mode: 'direct'
+      });
     } catch (e: any) {
       setResponse(`Error executing request: ${e.message}`);
     } finally {
@@ -3205,7 +3289,8 @@ function SystemTab({ diagnostics, configHistory, apiCall, fetchConfig, fetchDiag
     try {
       const data = await apiCall(`${API_BASE}/config/history/${rev}`);
       setDiffRev(rev);
-      setDiffRecord(data.record);
+      // API returns fields at top level (not nested under .record)
+      setDiffRecord(data.record || data);
     } catch (e) {}
   };
 

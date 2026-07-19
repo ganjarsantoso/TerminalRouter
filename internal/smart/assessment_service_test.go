@@ -72,11 +72,12 @@ func newTestService(store AssessmentPersister) *ModelAssessmentService {
 	provCheck := func(providerID, modelID string) (bool, bool, bool) { return true, true, true }
 	profiles := NewProfileStore(nil, true)
 	return &ModelAssessmentService{
-		activeRuns:      map[string]context.Context{},
+		activeRuns:      map[string]context.CancelFunc{},
 		store:           store,
 		credChecker:     credCheck,
 		providerChecker: provCheck,
 		profiles:        profiles,
+		DisableAutoRun:  true, // tests control completion explicitly
 	}
 }
 
@@ -104,11 +105,12 @@ func TestPreflight_NoCredential(t *testing.T) {
 	provCheck := func(providerID, modelID string) (bool, bool, bool) { return true, true, true }
 	profiles := NewProfileStore(nil, true)
 	svc := &ModelAssessmentService{
-		activeRuns:      map[string]context.Context{},
+		activeRuns:      map[string]context.CancelFunc{},
 		store:           store,
 		credChecker:     credCheck,
 		providerChecker: provCheck,
 		profiles:        profiles,
+		DisableAutoRun:  true,
 	}
 	var _ AssessmentPersister = store
 	res := svc.Preflight("openai", "gpt-4o")

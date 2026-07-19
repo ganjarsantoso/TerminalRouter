@@ -109,6 +109,15 @@ func getEnv(k string) string {
 	return os.Getenv(k)
 }
 
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
 // openBrowser attempts to open the default browser (best effort).
 func openBrowser(url string) {
 	var cmd string
