@@ -361,6 +361,10 @@ export default function App() {
     setGlobalSuccess(msg);
     setTimeout(() => setGlobalSuccess(null), 4000);
   };
+  const toastError = (msg: string) => {
+    setGlobalError(msg);
+    setTimeout(() => setGlobalError(null), 8000);
+  };
 
   // Main UI skeleton
   if (loading) {
@@ -566,13 +570,14 @@ export default function App() {
               )}
 
               {currentTab === 'profiles' && (
-                <ProfilesTab 
-                  config={config}
-                  discoveredModels={discoveredModels}
-                  apiCall={apiCall}
-                  fetchConfig={fetchConfig}
-                  toastSuccess={toastSuccess}
-                />
+                  <ProfilesTab 
+                    config={config}
+                    discoveredModels={discoveredModels}
+                    apiCall={apiCall}
+                    fetchConfig={fetchConfig}
+                    toastSuccess={toastSuccess}
+                    toastError={toastError}
+                  />
               )}
 
               {currentTab === 'routes' && (
@@ -1488,7 +1493,7 @@ const PRIV_LABELS = {
   cloud: 'Public Cloud (Shared API)'
 };
 
-function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
+function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }: any) {
   const [selectedModel, setSelectedModel] = useState<string | null>(null);
   
   // Custom Profile Editor values
@@ -1606,6 +1611,11 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
           const terminalStates = ['completed', 'failed', 'partial', 'cancelled'];
           if (terminalStates.includes(status.status)) {
             clearInterval(poll);
+            if (status.status === 'failed') {
+              toastError(`Assessment failed: all categories errored. See review for details.`);
+            } else if (status.status === 'partial') {
+              toastError(`Assessment partial: some categories failed. See review for details.`);
+            }
             const prop = await apiCall(`${API_BASE}/model-assessments/${res.assessment_id}/proposal`);
             setAssessProposal(prop);
             setAssessView('review');
