@@ -92,7 +92,13 @@ func (w *WebSearcher) Search(ctx context.Context, query string) ([]SearchResult,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("search endpoint returned %d", resp.StatusCode)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2000))
+		msg := strings.TrimSpace(string(body))
+		if len(msg) > 500 {
+			msg = msg[:500]
+		}
+		log.Printf("[external] web search %s returned %d: %s", endpoint, resp.StatusCode, msg)
+		return nil, fmt.Errorf("search endpoint %s returned %d: %s", endpoint, resp.StatusCode, msg)
 	}
 
 	body, err := io.ReadAll(resp.Body)
