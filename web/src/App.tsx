@@ -1550,7 +1550,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
           privacy
         }
       };
-      await apiCall(`${API_BASE}/model-profiles/${selectedModel}`, 'PUT', payload);
+      await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}`, 'PUT', payload);
       toastSuccess(`Capability profile for ${selectedModel} saved`);
       fetchConfig();
     } catch (e) {}
@@ -1559,7 +1559,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
   const handleResetProfile = async () => {
     if (!selectedModel || !confirm('Reset profile to built-in catalog default?')) return;
     try {
-      await apiCall(`${API_BASE}/model-profiles/${selectedModel}/overrides`, 'DELETE');
+      await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/overrides`, 'DELETE');
       toastSuccess(`Profile reset to defaults`);
       fetchConfig();
     } catch (e) {}
@@ -1570,7 +1570,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
     if (!selectedModel) return;
     setAssessLoading(true);
     try {
-      const est = await apiCall(`${API_BASE}/model-profiles/${selectedModel}/assessment/estimate`, 'POST', {
+      const est = await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/assessment/estimate`, 'POST', {
         depth: assessDepth, categories: assessCategories.length > 0 ? assessCategories : undefined
       });
       setAssessEstimate(est);
@@ -1582,7 +1582,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
     if (!selectedModel) return;
     setAssessLoading(true);
     try {
-      const res = await apiCall(`${API_BASE}/model-profiles/${selectedModel}/assessments`, 'POST', {
+      const res = await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/assessments`, 'POST', {
         depth: assessDepth, categories: assessCategories.length > 0 ? assessCategories : undefined
       });
       setAssessId(res.assessment_id);
@@ -1664,7 +1664,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
   
   const allModels = Array.from(new Set([
     ...Array.from(configuredModels),
-    ...(discoveredModels?.map((m: any) => m.model_id) || [])
+    ...(discoveredModels?.map((m: any) => m.id || m.model) || [])
   ])).sort();
 
   return (
