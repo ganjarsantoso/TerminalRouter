@@ -69,9 +69,12 @@ func modelExternalSearch() *cobra.Command {
 			}
 			defer closer()
 			provider, model := splitProfileID(args[0])
-			cp, ok := svc.Search(context.Background(), provider, model)
-			if !ok {
-				return Exit(ExitGeneral, fmt.Errorf("no curated independent evidence for %s", args[0]))
+			cp, ok, err := svc.Search(context.Background(), provider, model)
+			if err != nil {
+				return Exit(ExitGeneral, fmt.Errorf("web search failed: %w", err))
+			}
+			if !ok || cp == nil {
+				return Exit(ExitGeneral, fmt.Errorf("no independent benchmark evidence found online for %s", args[0]))
 			}
 			if flagJSON {
 				return printJSON(cp)
@@ -114,9 +117,12 @@ func modelExternalProposal() *cobra.Command {
 					current[k] = v
 				}
 			}
-			p, ok := svc.BuildProposal(context.Background(), provider, model, current)
-			if !ok {
-				return Exit(ExitGeneral, fmt.Errorf("no curated independent evidence for %s", args[0]))
+			p, ok, err := svc.BuildProposal(context.Background(), provider, model, current)
+			if err != nil {
+				return Exit(ExitGeneral, fmt.Errorf("web search failed: %w", err))
+			}
+			if !ok || p == nil {
+				return Exit(ExitGeneral, fmt.Errorf("no independent benchmark evidence found online for %s", args[0]))
 			}
 			if err := svc.SaveProposal(*p); err != nil {
 				return Exit(ExitGeneral, err)

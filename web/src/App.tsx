@@ -1702,10 +1702,12 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
       const msg = e?.message || '';
       if (msg.includes('No independent benchmark evidence') || msg.includes('no_external_evidence')) {
         toastError(`No independent benchmark evidence found online for "${selectedModel}".`);
+      } else if (msg.includes('search failed') || msg.includes('search_failed')) {
+        toastError(`Web search failed while gathering evidence: ${msg}`);
       } else if (msg.includes('not in the identity directory') || msg.includes('unknown_model')) {
         toastError(`"${selectedModel}" is not a recognized model. Try a known model id (e.g. openai/gpt-4o).`);
       } else {
-        toastError('Could not load independent benchmark evidence.');
+        toastError('Could not load independent benchmark evidence: ' + msg);
       }
       setExtView('none');
     }

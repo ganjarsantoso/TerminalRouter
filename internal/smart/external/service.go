@@ -55,34 +55,35 @@ func (s *Service) RegistryInfo() RegistryInfo {
 		Version:      registryVersion,
 		UpdatedAt:    registryUpdatedAt,
 		SourceCount:  len(sources),
-		ModelCount:   len(identities),
+		ModelCount:   0,
 		EvidenceCount: 0,
 		Sources:      sources,
 	}
 }
 
 // Search looks up a model by provider/model, fetching live benchmark evidence
-// (using cache when fresh) and returning a consensus profile. Returns
-// (nil, false) when the model identity is unknown.
-func (s *Service) Search(ctx context.Context, providerID, modelID string) (*ConsensusProfile, bool) {
-	id, ok := ResolveIdentity(providerID, modelID)
-	if !ok {
-		return nil, false
-	}
+// (using cache when fresh) and returning a consensus profile. Any model is
+// accepted; there is no curated identity directory.
+func (s *Service) Search(ctx context.Context, providerID, modelID string) (*ConsensusProfile, bool, error) {
+	id := identityFor(providerID, modelID)
 
 	// Use fresh cache if available.
 	if s.store != nil {
 		if recs, hit, _ := s.store.LoadCachedEvidence(id.ID, 24*time.Hour); hit && len(recs) > 0 {
 			cp := buildConsensus(id, recs)
-			return &cp, true
+			return &cp, true, nil
 		}
 	}
 
 	// Fetch live evidence.
 	var all []SearchResult
-	for _, q := range searchQueries(id) {
+	var searchErr error
+	var searched int
+	for _, q := range searchQueries(providerID, modelID) {
+		searched++
 		res, err := s.searcher.Search(ctx, q)
 		if err != nil {
+			searchErr = err
 			continue
 		}
 		all = append(all, res...)
@@ -93,34 +94,38 @@ func (s *Service) Search(ctx context.Context, providerID, modelID string) (*Cons
 		recs = summarizeEvidence(ctx, s.summarizer, s.searcher, id, all)
 	}
 	if len(recs) == 0 {
-		// Fallback to regex extraction when no summarizer is configured.
+		// Fallback to regex extraction when no summarizer is configured or it found nothing.
 		recs = extractEvidence(id, all)
 	}
 	if len(recs) == 0 {
-		return nil, true // known model, but no evidence found live
+		// Distinguish "search could not run" from "ran but found nothing".
+		if searched > 0 && len(all) == 0 && searchErr != nil {
+			return nil, false, fmt.Errorf("web search failed: %w", searchErr)
+		}
+		return nil, true, nil // searched, but no benchmark evidence found
 	}
 	if s.store != nil {
 		_ = s.store.CacheExternalEvidence(recs)
 	}
 	cp := buildConsensus(id, recs)
-	return &cp, true
+	return &cp, true, nil
 }
 
 // Estimate is an alias for Search.
-func (s *Service) Estimate(ctx context.Context, providerID, modelID string) (*ConsensusProfile, bool) {
+func (s *Service) Estimate(ctx context.Context, providerID, modelID string) (*ConsensusProfile, bool, error) {
 	return s.Search(ctx, providerID, modelID)
 }
 
 // BuildProposal constructs a reviewable proposal for a model, comparing the
 // external consensus against the model's current profile values.
 // current is the map of capability -> current value (0 if absent).
-func (s *Service) BuildProposal(ctx context.Context, providerID, modelID string, current map[string]float64) (*Proposal, bool) {
-	cp, ok := s.Search(ctx, providerID, modelID)
-	if !ok {
-		return nil, false
+func (s *Service) BuildProposal(ctx context.Context, providerID, modelID string, current map[string]float64) (*Proposal, bool, error) {
+	cp, ok, err := s.Search(ctx, providerID, modelID)
+	if err != nil {
+		return nil, false, err
 	}
-	if cp == nil || len(cp.Capabilities) == 0 {
-		return nil, false
+	if !ok || cp == nil || len(cp.Capabilities) == 0 {
+		return nil, false, nil
 	}
 	var fields []ProposalField
 	for _, c := range CapabilityKeys {
@@ -141,7 +146,7 @@ func (s *Service) BuildProposal(ctx context.Context, providerID, modelID string,
 		fields = append(fields, pf)
 	}
 	if len(fields) == 0 {
-		return nil, false
+		return nil, false, nil
 	}
 	p := Proposal{
 		ID:             uuid.NewString(),
@@ -156,7 +161,7 @@ func (s *Service) BuildProposal(ctx context.Context, providerID, modelID string,
 		Status:         "pending",
 		RegistryVersion: registryVersion,
 	}
-	return &p, true
+	return &p, true, nil
 }
 
 // SaveProposal persists a proposal.

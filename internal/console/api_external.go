@@ -28,7 +28,12 @@ func (s *Server) handleExternalEvidenceSearch(w http.ResponseWriter, r *http.Req
 	id := r.PathValue("id")
 	providerID, modelID := splitProfileID(id)
 	svc := s.getExternalService()
-	cp, ok := svc.Search(r.Context(), providerID, modelID)
+	cp, ok, err := svc.Search(r.Context(), providerID, modelID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "search_failed",
+			"Could not search the web for benchmark evidence: "+err.Error())
+		return
+	}
 	if !ok {
 		writeError(w, http.StatusNotFound, "unknown_model",
 			"Model "+id+" is not in the identity directory; add it or use a known model id.")
@@ -57,8 +62,13 @@ func (s *Server) handleExternalEvidenceProposal(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	p, ok := svc.BuildProposal(r.Context(), providerID, modelID, current)
-	if !ok {
+	p, ok, err := svc.BuildProposal(r.Context(), providerID, modelID, current)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "search_failed",
+			"Could not search the web for benchmark evidence: "+err.Error())
+		return
+	}
+	if !ok || p == nil {
 		writeError(w, http.StatusNotFound, "no_external_evidence",
 			"No independent benchmark evidence found online for "+id)
 		return

@@ -3,7 +3,6 @@ package external
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 // mockSearcher returns canned search results so unit tests don't hit the network.
@@ -27,39 +26,28 @@ func TestRegistryInfo(t *testing.T) {
 	if info.SourceCount != 4 {
 		t.Fatalf("expected 4 sources, got %d", info.SourceCount)
 	}
-	if info.ModelCount == 0 {
-		t.Fatalf("empty identity directory: models=%d", info.ModelCount)
-	}
 }
 
-func TestResolveIdentity(t *testing.T) {
-	cases := []struct {
-		prov, model, wantID string
-		want                bool
-	}{
-		{"openai", "gpt-4o", "openai-gpt-4o", true},
-		{"anthropic", "claude-3-5-sonnet-latest", "anthropic-claude-3-5-sonnet", true},
-		{"openai", "gpt-4o-mini", "openai-gpt-4o-mini", true},
-		{"nope", "unknown-model", "", false},
-	}
-	for _, c := range cases {
-		id, ok := ResolveIdentity(c.prov, c.model)
-		if ok != c.want {
-			t.Fatalf("ResolveIdentity(%s,%s) ok=%v want %v", c.prov, c.model, ok, c.want)
-		}
-		if ok && id.ID != c.wantID {
-			t.Fatalf("resolved to %s want %s", id.ID, c.wantID)
-		}
-	}
-}
-
-func TestSearchGPT4o(t *testing.T) {
+func TestSearchAnyModelAccepted(t *testing.T) {
 	s := newTestService()
-	cp, ok := s.Search(context.Background(), "openai", "gpt-4o")
-	if !ok {
-		t.Fatal("gpt-4o not resolved")
+	// No curated directory: any provider/model is accepted and searched live.
+	cp, ok, err := s.Search(context.Background(), "nvidia", "stepfun-ai/step-3.7-flash")
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
 	}
-	if cp == nil {
+	if !ok {
+		t.Fatal("any model id should be accepted (ok=false)")
+	}
+	_ = cp // cp may be nil if the live mock yields no matches; acceptance is what we test.
+}
+
+func TestSearchExtracts(t *testing.T) {
+	s := newTestService()
+	cp, ok, err := s.Search(context.Background(), "openai", "gpt-4o")
+	if err != nil {
+		t.Fatalf("Search error: %v", err)
+	}
+	if !ok || cp == nil {
 		t.Fatal("no evidence")
 	}
 	for _, k := range []CapabilityKey{CapGeneral, CapReasoning, CapCoding, CapMathematics} {
@@ -78,8 +66,11 @@ func TestSearchGPT4o(t *testing.T) {
 
 func TestBuildProposal(t *testing.T) {
 	s := newTestService()
-	p, ok := s.BuildProposal(context.Background(), "openai", "gpt-4o", map[string]float64{"general": 5.0})
-	if !ok {
+	p, ok, err := s.BuildProposal(context.Background(), "openai", "gpt-4o", map[string]float64{"general": 5.0})
+	if err != nil {
+		t.Fatalf("BuildProposal error: %v", err)
+	}
+	if !ok || p == nil {
 		t.Fatal("proposal not built")
 	}
 	if len(p.Fields) == 0 {
@@ -103,7 +94,7 @@ func TestBuildProposal(t *testing.T) {
 }
 
 func TestExtractEvidence(t *testing.T) {
-	id, _ := ResolveIdentity("openai", "gpt-4o")
+	id := identityFor("openai", "gpt-4o")
 	res := []SearchResult{
 		{Title: "x", Snippet: "GPT-4o LiveBench overall 72.1% and LiveBench reasoning 68.4%", URL: "u"},
 		{Title: "y", Snippet: "SWE-bench Verified 51.0% for gpt-4o", URL: "u2"},
@@ -113,5 +104,3 @@ func TestExtractEvidence(t *testing.T) {
 		t.Fatalf("expected >=2 evidence records, got %d", len(recs))
 	}
 }
-
-var _ = time.Now
