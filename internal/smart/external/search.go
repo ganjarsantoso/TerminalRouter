@@ -34,7 +34,12 @@ func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
 		timeout = 15 * time.Second
 	}
 	insecure := cfg.InsecureSkipVerify || os.Getenv("TERMROUTER_WEBSEARCH_INSECURE") == "1"
-	transport := &http.Transport{}
+	transport := &http.Transport{
+		// Picky transparent proxies often drop keep-alive/idle connections,
+		// surfacing as EOF. Disable keep-alives and HTTP/2 to be safe.
+		DisableKeepAlives: true,
+		ForceAttemptHTTP2: false,
+	}
 	if cfg.Proxy != "" {
 		if pu, err := url.Parse(cfg.Proxy); err == nil {
 			transport.Proxy = http.ProxyURL(pu)
@@ -98,6 +103,21 @@ func (w *WebSearcher) Search(ctx context.Context, query string) ([]SearchResult,
 	return results, nil
 }
 
+// isTransient reports whether an error is worth retrying (proxy dropped the
+// connection, etc.) rather than a definitive failure.
+func isTransient(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "EOF") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "connection closed") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "server closed") ||
+		strings.Contains(msg, "broken pipe")
+}
+
 func (w *WebSearcher) searchOnce(ctx context.Context, client *http.Client, endpoint, query, method string) ([]SearchResult, error) {
 	var bodyReader io.Reader
 	if method == http.MethodPost {
@@ -117,39 +137,62 @@ func (w *WebSearcher) searchOnce(ctx context.Context, client *http.Client, endpo
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TermRouter/1.0")
+	// Force the proxy to close the connection after the response (avoids EOF on
+	// reused keep-alive connections behind transparent proxies).
+	req.Header.Set("Connection", "close")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 2000))
-		msg := strings.TrimSpace(string(body))
-		if len(msg) > 500 {
-			msg = msg[:500]
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Duration(attempt) * 300 * time.Millisecond):
+			}
 		}
-		log.Printf("[external] web search %s %s returned %d: %s", method, endpoint, resp.StatusCode, msg)
-		return nil, fmt.Errorf("search endpoint %s returned %d: %s", endpoint, resp.StatusCode, msg)
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	results := parseDuckDuckGo(body)
-
-	// Enrich top results with page text (best-effort, bounded).
-	const enrichLimit = 6
-	for i, r := range results {
-		if i >= enrichLimit || r.URL == "" {
-			continue
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			if isTransient(err) {
+				continue // retry
+			}
+			return nil, err
 		}
-		if pageText, err := w.FetchPage(r.URL); err == nil && pageText != "" {
-			results[i].Snippet = r.Snippet + " " + pageText
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 2000))
+			msg := strings.TrimSpace(string(body))
+			if len(msg) > 500 {
+				msg = msg[:500]
+			}
+			log.Printf("[external] web search %s %s returned %d: %s", method, endpoint, resp.StatusCode, msg)
+			return nil, fmt.Errorf("search endpoint %s returned %d: %s", endpoint, resp.StatusCode, msg)
 		}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			lastErr = err
+			if isTransient(err) {
+				continue
+			}
+			return nil, err
+		}
+		results := parseDuckDuckGo(body)
+		// Enrich top results with page text (best-effort, bounded).
+		const enrichLimit = 6
+		for i, r := range results {
+			if i >= enrichLimit || r.URL == "" {
+				continue
+			}
+			if pageText, err := w.FetchPage(r.URL); err == nil && pageText != "" {
+				results[i].Snippet = r.Snippet + " " + pageText
+			}
+		}
+		return results, nil
 	}
-	return results, nil
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("search failed after retries")
 }
 
 // FetchPage implements PageFetcher: fetches a page and returns benchmark-
