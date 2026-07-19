@@ -22,7 +22,8 @@ import {
   Layers,
   Info,
   Pencil,
-  XCircle
+  XCircle,
+  AlertTriangle
 } from 'lucide-react';
 
 // API helpers
@@ -1602,13 +1603,12 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
         try {
           const status = await apiCall(`${API_BASE}/model-assessments/${res.assessment_id}`);
           setAssessStatus(status);
-          if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
+          const terminalStates = ['completed', 'failed', 'partial', 'cancelled'];
+          if (terminalStates.includes(status.status)) {
             clearInterval(poll);
-            if (status.status === 'completed') {
-              const prop = await apiCall(`${API_BASE}/model-assessments/${res.assessment_id}/proposal`);
-              setAssessProposal(prop);
-              setAssessView('review');
-            }
+            const prop = await apiCall(`${API_BASE}/model-assessments/${res.assessment_id}/proposal`);
+            setAssessProposal(prop);
+            setAssessView('review');
           }
         } catch (e) { clearInterval(poll); }
       }, 2000);
@@ -1644,11 +1644,15 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
 
   const handleCancelAssessment = async () => {
     if (!assessId) return;
+    if (assessStatus && ['completed', 'failed', 'partial', 'cancelled'].includes(assessStatus.status)) {
+      setAssessView('none');
+      return;
+    }
     try {
       await apiCall(`${API_BASE}/model-assessments/${assessId}/cancel`, 'POST', {});
       toastSuccess('Assessment cancelled');
       setAssessView('none');
-    } catch (e) {}
+    } catch (e) { setAssessView('none'); }
   };
 
   const handleDismissAssessment = () => {
@@ -1798,9 +1802,19 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess }: any) {
                 <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full mx-4 space-y-5 shadow-2xl">
                   <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
                     <h4 className="font-bold text-sm text-zinc-100 flex items-center gap-2">
-                      <RefreshCw className="h-4 w-4 animate-spin text-indigo-400" />
-                      Assessing {selectedModel}
+                      {assessStatus.status === 'failed' || assessStatus.status === 'partial' ? (
+                        <AlertTriangle className="h-4 w-4 text-amber-400" />
+                      ) : assessStatus.status === 'completed' ? (
+                        <CheckCircle className="h-4 w-4 text-emerald-400" />
+                      ) : (
+                        <RefreshCw className="h-4 w-4 animate-spin text-indigo-400" />
+                      )}
+                      {assessStatus.status === 'failed' ? 'Assessment Failed' :
+                       assessStatus.status === 'partial' ? 'Assessment Partial' :
+                       assessStatus.status === 'completed' ? 'Assessment Complete' :
+                       `Assessing ${selectedModel}`}
                     </h4>
+                    <button onClick={() => setAssessView('none')} className="text-zinc-500 hover:text-zinc-300 text-lg">&times;</button>
                   </div>
                   
                   <div className="space-y-2">
