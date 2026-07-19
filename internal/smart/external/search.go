@@ -31,7 +31,7 @@ func DefaultSearcher() Searcher {
 func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
-		timeout = 15 * time.Second
+		timeout = 30 * time.Second
 	}
 	insecure := cfg.InsecureSkipVerify || os.Getenv("TERMROUTER_WEBSEARCH_INSECURE") == "1"
 	transport := &http.Transport{

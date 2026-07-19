@@ -75,18 +75,39 @@ func (s *Service) Search(ctx context.Context, providerID, modelID string) (*Cons
 		}
 	}
 
-	// Fetch live evidence.
+	// Fetch live evidence. Run queries concurrently so a single slow/blocked
+	// query (common behind TLS-intercepting proxies) cannot stall or fail the
+	// whole lookup. Each query gets its own bounded timeout; we succeed as long
+	// as at least one query returns results.
 	var all []SearchResult
 	var searchErr error
-	var searched int
-	for _, q := range searchQueries(providerID, modelID) {
-		searched++
-		res, err := s.searcher.Search(ctx, q)
-		if err != nil {
+	var anySuccess bool
+	queries := searchQueries(providerID, modelID)
+	resultsCh := make(chan []SearchResult, len(queries))
+	errCh := make(chan error, len(queries))
+	for _, q := range queries {
+		qc := q
+		go func() {
+			qctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			res, err := s.searcher.Search(qctx, qc)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			resultsCh <- res
+		}()
+	}
+	for range queries {
+		select {
+		case res := <-resultsCh:
+			anySuccess = true
+			all = append(all, res...)
+		case err := <-errCh:
 			searchErr = err
-			continue
+		case <-ctx.Done():
+			searchErr = ctx.Err()
 		}
-		all = append(all, res...)
 	}
 
 	var recs []EvidenceRecord
@@ -98,8 +119,8 @@ func (s *Service) Search(ctx context.Context, providerID, modelID string) (*Cons
 		recs = extractEvidence(id, all)
 	}
 	if len(recs) == 0 {
-		// Distinguish "search could not run" from "ran but found nothing".
-		if searched > 0 && len(all) == 0 && searchErr != nil {
+		// Distinguish "search could not run at all" from "ran but found nothing".
+		if !anySuccess && searchErr != nil {
 			return nil, false, fmt.Errorf("web search failed: %w", searchErr)
 		}
 		return nil, true, nil // searched, but no benchmark evidence found
