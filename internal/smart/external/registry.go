@@ -117,7 +117,7 @@ var identities = []ModelIdentity{
 		Name:     "Llama 3.1 405B",
 		Provider: "meta",
 		Model:    "llama-3.1-405b",
-		Aliases:  []string{"meta/llama-3.1-405b", "llama-3.1-405b", "llama-3.1-405b-instruct"},
+		Aliases:  []string{"meta/llama-3.1-405b", "llama-3.1-405b", "llama-3.1-405b-instruct", "meta-llama-3.1-405b-instruct", "meta-llama-3.1-405b", "llama3.1-405b"},
 	},
 	{
 		ID:       "deepseek-deepseek-v3",

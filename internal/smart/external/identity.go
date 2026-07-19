@@ -12,6 +12,11 @@ func init() {
 		aliasIndex[strings.ToLower(id.Name)] = id
 		if id.Provider != "" && id.Model != "" {
 			aliasIndex[strings.ToLower(id.Provider+"/"+id.Model)] = id
+			// base model (strip date/version suffixes like -2024-08-06)
+			base := stripVersionSuffix(id.Model)
+			if base != id.Model {
+				aliasIndex[strings.ToLower(id.Provider+"/"+base)] = id
+			}
 		}
 		for _, a := range id.Aliases {
 			aliasIndex[strings.ToLower(a)] = id
@@ -33,6 +38,10 @@ func ResolveIdentity(providerID, modelID string) (ModelIdentity, bool) {
 		if id, ok := aliasIndex[strings.ToLower(modelID)]; ok {
 			return id, true
 		}
+		// Version/date-suffix-stripped bare model id (e.g. gpt-4o-2024-08-06).
+		if id, ok := aliasIndex[strings.ToLower(stripVersionSuffix(modelID))]; ok {
+			return id, true
+		}
 	}
 	// Any alias containing the model id as a token.
 	if modelID != "" {
@@ -44,6 +53,32 @@ func ResolveIdentity(providerID, modelID string) (ModelIdentity, bool) {
 		}
 	}
 	return ModelIdentity{}, false
+}
+
+// stripVersionSuffix removes a trailing -YYYY-MM-DD version suffix so dated
+// model ids map to their family baseline.
+func stripVersionSuffix(model string) string {
+	for i := 0; i+10 <= len(model); i++ {
+		seg := model[i : i+10]
+		if seg[4] == '-' && seg[7] == '-' && isDigits(seg[:4]) && isDigits(seg[5:7]) && isDigits(seg[8:]) {
+			if i > 0 && model[i-1] == '-' {
+				return model[:i-1]
+			}
+		}
+	}
+	return model
+}
+
+func isDigits(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // ListIdentities returns all curated model identities.

@@ -1699,8 +1699,8 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
       setExtView('review');
     } catch (e: any) {
       const msg = e?.message || '';
-      if (msg.includes('no_external_evidence')) {
-        toastError('No curated independent benchmark evidence found for this model.');
+      if (msg.includes('No curated independent benchmark evidence') || msg.includes('no_external_evidence')) {
+        toastError(`No curated independent benchmark evidence found for "${selectedModel}".`);
       } else {
         toastError('Could not load independent benchmark evidence.');
       }
