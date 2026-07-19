@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -29,7 +30,7 @@ func newExternalService() (*external.Service, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return external.NewService(store), func() { store.Close() }, nil
+	return external.NewService(store, nil), func() { store.Close() }, nil
 }
 
 func modelExternalRegistry() *cobra.Command {
@@ -68,7 +69,7 @@ func modelExternalSearch() *cobra.Command {
 			}
 			defer closer()
 			provider, model := splitProfileID(args[0])
-			cp, ok := svc.Search(provider, model)
+			cp, ok := svc.Search(context.Background(), provider, model)
 			if !ok {
 				return Exit(ExitGeneral, fmt.Errorf("no curated independent evidence for %s", args[0]))
 			}
@@ -113,7 +114,7 @@ func modelExternalProposal() *cobra.Command {
 					current[k] = v
 				}
 			}
-			p, ok := svc.BuildProposal(provider, model, current)
+			p, ok := svc.BuildProposal(context.Background(), provider, model, current)
 			if !ok {
 				return Exit(ExitGeneral, fmt.Errorf("no curated independent evidence for %s", args[0]))
 			}

@@ -8,9 +8,10 @@ import (
 	"github.com/termrouter/termrouter/internal/smart/external"
 )
 
-// getExternalService returns an ExternalEvidenceService backed by the store.
+// getExternalService returns an ExternalEvidenceService backed by the store and
+// a live web searcher.
 func (s *Server) getExternalService() *external.Service {
-	return external.NewService(s.Store)
+	return external.NewService(s.Store, nil)
 }
 
 func (s *Server) handleExternalRegistryInfo(w http.ResponseWriter, r *http.Request) {
@@ -22,11 +23,18 @@ func (s *Server) handleExternalEvidenceSearch(w http.ResponseWriter, r *http.Req
 	id := r.PathValue("id")
 	providerID, modelID := splitProfileID(id)
 	svc := s.getExternalService()
-	cp, ok := svc.Search(providerID, modelID)
+	cp, ok := svc.Search(r.Context(), providerID, modelID)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{
+			"error":   "unknown_model",
+			"message": "Model " + id + " is not in the identity directory; add it or use a known model id.",
+		})
+		return
+	}
+	if cp == nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{
 			"error":   "no_external_evidence",
-			"message": "No curated independent benchmark evidence found for " + id,
+			"message": "No independent benchmark evidence found online for " + id,
 		})
 		return
 	}
@@ -48,11 +56,11 @@ func (s *Server) handleExternalEvidenceProposal(w http.ResponseWriter, r *http.R
 		}
 	}
 
-	p, ok := svc.BuildProposal(providerID, modelID, current)
+	p, ok := svc.BuildProposal(r.Context(), providerID, modelID, current)
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]any{
 			"error":   "no_external_evidence",
-			"message": "No curated independent benchmark evidence found for " + id,
+			"message": "No independent benchmark evidence found online for " + id,
 		})
 		return
 	}

@@ -1,6 +1,25 @@
 package external
 
-import "time"
+import (
+	"context"
+	"time"
+)
+
+// Searcher is a pluggable web-search backend used to find current, published
+// benchmark figures for a model at runtime. No values are hardcoded; evidence
+// is always sourced live (and cached locally).
+type Searcher interface {
+	// Search returns result snippets (title + body text) for the given query.
+	Search(ctx context.Context, query string) ([]SearchResult, error)
+}
+
+// SearchResult is a single search hit with extractable text.
+type SearchResult struct {
+	Title   string `json:"title"`
+	Snippet string `json:"snippet"`
+	URL     string `json:"url"`
+}
+
 
 // SourceID identifies a curated, independent benchmark source.
 type SourceID string
@@ -141,6 +160,9 @@ type Proposal struct {
 	ModelID       string          `json:"model_id"`
 	ModelIdentity string          `json:"model_identity"`
 	Fields        []ProposalField `json:"fields"`
+	Overall       float64         `json:"overall"`
+	Confidence    float64         `json:"confidence"`
+	Sources       []SourceID      `json:"sources"`
 	CreatedAt     time.Time       `json:"created_at"`
 	Status        string          `json:"status"` // pending | applied | dismissed
 	RegistryVersion string        `json:"registry_version"`
@@ -154,4 +176,12 @@ type RegistryInfo struct {
 	ModelCount   int       `json:"model_count"`
 	EvidenceCount int      `json:"evidence_count"`
 	Sources      []SourceMeta `json:"sources"`
+}
+
+// ImportRecord is a persisted import event.
+type ImportRecord struct {
+	ProfileID    string             `json:"profile_id"`
+	ProposalID   string             `json:"proposal_id"`
+	AppliedAt    time.Time          `json:"applied_at"`
+	Capabilities map[string]float64 `json:"capabilities"`
 }

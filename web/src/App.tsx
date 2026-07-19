@@ -1689,9 +1689,9 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
       if (!extRegistry) {
         try { setExtRegistry(await apiCall(`${API_BASE}/external-registry`)); } catch (e) {}
       }
-      const consensus = await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/external-evidence`);
-      setExtConsensus(consensus);
+      // Live search + build proposal (single call; the proposal embeds consensus).
       const proposal = await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/external-evidence/proposal`, 'POST', {});
+      setExtConsensus({ overall: proposal.overall, confidence: proposal.confidence, sources: proposal.sources });
       setExtProposal(proposal);
       const initCaps: any = {};
       (proposal.fields || []).forEach((f: any) => { initCaps[f.capability] = f.proposed; });
@@ -1699,8 +1699,10 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
       setExtView('review');
     } catch (e: any) {
       const msg = e?.message || '';
-      if (msg.includes('No curated independent benchmark evidence') || msg.includes('no_external_evidence')) {
-        toastError(`No curated independent benchmark evidence found for "${selectedModel}".`);
+      if (msg.includes('No independent benchmark evidence') || msg.includes('no_external_evidence')) {
+        toastError(`No independent benchmark evidence found online for "${selectedModel}".`);
+      } else if (msg.includes('not in the identity directory') || msg.includes('unknown_model')) {
+        toastError(`"${selectedModel}" is not a recognized model. Try a known model id (e.g. openai/gpt-4o).`);
       } else {
         toastError('Could not load independent benchmark evidence.');
       }

@@ -1,6 +1,7 @@
 package external
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -22,60 +23,92 @@ type Provider interface {
 	RecordExternalImport(profileID, proposalID string, capabilities map[string]float64) error
 	// ExternalImportHistory returns recorded imports, newest first.
 	ExternalImportHistory(limit int) ([]ImportRecord, error)
+
+	// CacheExternalEvidence stores fetched evidence for a model identity.
+	CacheExternalEvidence(recs []EvidenceRecord) error
+	// LoadCachedEvidence returns cached evidence for a model identity (newest first).
+	LoadCachedEvidence(modelIdentity string, maxAge time.Duration) ([]EvidenceRecord, bool, error)
 }
 
-// ImportRecord is a persisted import event.
-type ImportRecord struct {
-	ProfileID    string             `json:"profile_id"`
-	ProposalID   string             `json:"proposal_id"`
-	AppliedAt    time.Time          `json:"applied_at"`
-	Capabilities map[string]float64 `json:"capabilities"`
-}
-
-// Service is the external-evidence service used by console and CLI.
+// Service is the external-evidence service used by console and CLI. Evidence is
+// fetched live via the injected Searcher and cached locally (offline-first).
 type Service struct {
-	store Provider
+	store    Provider
+	searcher Searcher
 }
 
-// NewService builds a Service backed by the given persistence provider.
-func NewService(store Provider) *Service {
-	return &Service{store: store}
+// NewService builds a Service backed by the given persistence provider and a
+// web searcher. If searcher is nil, a default live searcher is used.
+func NewService(store Provider, searcher Searcher) *Service {
+	if searcher == nil {
+		searcher = DefaultSearcher()
+	}
+	return &Service{store: store, searcher: searcher}
 }
 
-// RegistryInfo returns metadata about the bundled curated registry.
+// RegistryInfo returns metadata about the bundled methodology/registry.
 func (s *Service) RegistryInfo() RegistryInfo {
 	return RegistryInfo{
 		Version:      registryVersion,
 		UpdatedAt:    registryUpdatedAt,
 		SourceCount:  len(sources),
 		ModelCount:   len(identities),
-		EvidenceCount: len(sampleEvidence),
+		EvidenceCount: 0,
 		Sources:      sources,
 	}
 }
 
-// Search looks up a model by provider/model and returns its consensus profile
-// (nil when unresolved).
-func (s *Service) Search(providerID, modelID string) (*ConsensusProfile, bool) {
+// Search looks up a model by provider/model, fetching live benchmark evidence
+// (using cache when fresh) and returning a consensus profile. Returns
+// (nil, false) when the model identity is unknown.
+func (s *Service) Search(ctx context.Context, providerID, modelID string) (*ConsensusProfile, bool) {
 	id, ok := ResolveIdentity(providerID, modelID)
 	if !ok {
 		return nil, false
 	}
-	cp := buildConsensus(id)
+
+	// Use fresh cache if available.
+	if s.store != nil {
+		if recs, hit, _ := s.store.LoadCachedEvidence(id.ID, 24*time.Hour); hit && len(recs) > 0 {
+			cp := buildConsensus(id, recs)
+			return &cp, true
+		}
+	}
+
+	// Fetch live evidence.
+	var all []SearchResult
+	for _, q := range searchQueries(id) {
+		res, err := s.searcher.Search(ctx, q)
+		if err != nil {
+			continue
+		}
+		all = append(all, res...)
+	}
+	recs := extractEvidence(id, all)
+	if len(recs) == 0 {
+		return nil, true // known model, but no evidence found live
+	}
+	if s.store != nil {
+		_ = s.store.CacheExternalEvidence(recs)
+	}
+	cp := buildConsensus(id, recs)
 	return &cp, true
 }
 
-// Estimate is an alias for Search returning the consensus profile.
-func (s *Service) Estimate(providerID, modelID string) (*ConsensusProfile, bool) {
-	return s.Search(providerID, modelID)
+// Estimate is an alias for Search.
+func (s *Service) Estimate(ctx context.Context, providerID, modelID string) (*ConsensusProfile, bool) {
+	return s.Search(ctx, providerID, modelID)
 }
 
 // BuildProposal constructs a reviewable proposal for a model, comparing the
 // external consensus against the model's current profile values.
 // current is the map of capability -> current value (0 if absent).
-func (s *Service) BuildProposal(providerID, modelID string, current map[string]float64) (*Proposal, bool) {
-	cp, ok := s.Search(providerID, modelID)
+func (s *Service) BuildProposal(ctx context.Context, providerID, modelID string, current map[string]float64) (*Proposal, bool) {
+	cp, ok := s.Search(ctx, providerID, modelID)
 	if !ok {
+		return nil, false
+	}
+	if cp == nil || len(cp.Capabilities) == 0 {
 		return nil, false
 	}
 	var fields []ProposalField
@@ -105,6 +138,9 @@ func (s *Service) BuildProposal(providerID, modelID string, current map[string]f
 		ModelID:        modelID,
 		ModelIdentity:  cp.ModelIdentity,
 		Fields:         fields,
+		Overall:        cp.Overall,
+		Confidence:     cp.Confidence,
+		Sources:        cp.Sources,
 		CreatedAt:      time.Now().UTC(),
 		Status:         "pending",
 		RegistryVersion: registryVersion,

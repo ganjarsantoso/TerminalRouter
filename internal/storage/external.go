@@ -3,6 +3,7 @@ package storage
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/termrouter/termrouter/internal/smart/external"
@@ -155,4 +156,76 @@ func statusArg(status string) []interface{} {
 		return nil
 	}
 	return []interface{}{status}
+}
+
+// CacheExternalEvidence stores fetched evidence records for a model identity,
+// replacing any prior cache for that identity.
+func (s *Store) CacheExternalEvidence(recs []external.EvidenceRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM external_evidence_records WHERE model_identity = ?`, recs[0].ModelIdentity); err != nil {
+		return err
+	}
+	for _, r := range recs {
+		id := fmt.Sprintf("%s|%s|%s|%s", r.ModelIdentity, r.Source, r.Benchmark, time.Now().UTC().Format(time.RFC3339Nano))
+		_, err := tx.Exec(`
+INSERT INTO external_evidence_records (id, source, model_identity, benchmark, value, scale, capability, reported_at, url, notes)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, id, string(r.Source), r.ModelIdentity, r.Benchmark, r.Value, string(r.Scale), string(r.Capability),
+			r.ReportedAt.UTC().Format(time.RFC3339), r.URL, r.Notes)
+		if err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// LoadCachedEvidence returns cached evidence for a model identity if it is
+// fresher than maxAge. The boolean is false when stale or absent.
+func (s *Store) LoadCachedEvidence(modelIdentity string, maxAge time.Duration) ([]external.EvidenceRecord, bool, error) {
+	rows, err := s.db.Query(`
+SELECT source, benchmark, value, scale, capability, reported_at, url, notes
+FROM external_evidence_records WHERE model_identity = ? ORDER BY reported_at DESC
+`, modelIdentity)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	var out []external.EvidenceRecord
+	var newest time.Time
+	for rows.Next() {
+		var source, benchmark, scale, capability, reportedAt, url, notes string
+		var value float64
+		if err := rows.Scan(&source, &benchmark, &value, &scale, &capability, &reportedAt, &url, &notes); err != nil {
+			return nil, false, err
+		}
+		rt, _ := time.Parse(time.RFC3339, reportedAt)
+		if rt.After(newest) {
+			newest = rt
+		}
+		out = append(out, external.EvidenceRecord{
+			Source:        external.SourceID(source),
+			ModelIdentity: modelIdentity,
+			Benchmark:     benchmark,
+			Value:         value,
+			Scale:         external.ScaleKind(scale),
+			Capability:    external.CapabilityKey(capability),
+			ReportedAt:    rt,
+			URL:           url,
+			Notes:         notes,
+		})
+	}
+	if len(out) == 0 {
+		return nil, false, rows.Err()
+	}
+	if maxAge > 0 && time.Since(newest) > maxAge {
+		return out, false, nil
+	}
+	return out, true, nil
 }

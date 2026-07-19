@@ -7,20 +7,9 @@ import (
 	"time"
 )
 
-// evidenceForIdentity returns all curated evidence records for a model identity.
-func evidenceForIdentity(identityID string) []EvidenceRecord {
-	var out []EvidenceRecord
-	for _, e := range sampleEvidence {
-		if e.ModelIdentity == identityID {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// buildConsensus computes the external-consensus profile for a model identity.
-func buildConsensus(id ModelIdentity) ConsensusProfile {
-	recs := evidenceForIdentity(id.ID)
+// buildConsensus computes the external-consensus profile for a model identity
+// from a set of (live-fetched or cached) evidence records.
+func buildConsensus(id ModelIdentity, recs []EvidenceRecord) ConsensusProfile {
 	byCap := map[CapabilityKey][]EvidenceRecordWithNorm{}
 	seen := map[string]bool{}
 	var sourceSet []SourceID
