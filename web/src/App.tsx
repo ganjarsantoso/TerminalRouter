@@ -20,7 +20,8 @@ import {
   LogOut,
   Clock,
   Layers,
-  Info
+  Info,
+  Pencil
 } from 'lucide-react';
 
 // API helpers
@@ -2039,6 +2040,7 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
   const [smartSession, setSmartSession] = useState(false);
   const [smartSessionTTL, setSmartSessionTTL] = useState('60m');
   const [smartMode, setSmartMode] = useState('shadow');
+  const [editingRoute, setEditingRoute] = useState<any | null>(null);
 
   const [shadowReports] = useState<any>({});
 
@@ -2079,6 +2081,7 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
     setSmartSession(false);
     setSmartSessionTTL('60m');
     setSmartMode('shadow');
+    setEditingRoute(null);
   };
 
   const handleDeleteRoute = async (route: any) => {
@@ -2116,54 +2119,81 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
     }
   };
 
+  const handleEditRoute = (route: any) => {
+    setFormName(route.name);
+    setFormMode(route.mode);
+    setEditingRoute(route);
+
+    if (route.mode === 'single') {
+      setSingleProvider(route.single?.provider || '');
+      setSingleModel(route.single?.model || '');
+      setFbTargets([{ provider: '', model: '' }]);
+      setSmartCandidates([{ provider: '', model: '' }]);
+    } else if (route.mode === 'fallback') {
+      setFbTargets(route.fallback?.targets?.length > 0
+        ? route.fallback.targets.map((t: any) => ({ provider: t.provider, model: t.model }))
+        : [{ provider: '', model: '' }]);
+      setSmartCandidates([{ provider: '', model: '' }]);
+    } else if (route.mode === 'smart') {
+      setSmartCandidates(route.candidates?.length > 0
+        ? route.candidates.map((c: any) => ({ provider: c.provider, model: c.model }))
+        : [{ provider: '', model: '' }]);
+      setSmartPolicy(route.smart?.policy || 'balanced');
+      setSmartConfidence(route.smart?.confidence_threshold ?? 0.7);
+      setSmartSession(route.smart?.session_affinity?.enabled || false);
+      setSmartSessionTTL(route.smart?.session_affinity?.ttl || '60m');
+      setSmartMode(route.smart?.mode || 'shadow');
+      setSmartDefaultTarget(route.smart?.low_confidence_target || '');
+    }
+
+    setWizardStep(1);
+  };
+
   // Create route wizard
   const handleCreateRoute = async () => {
     const safeName = formName.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '');
     const extraAliases = formAliases.split(',').map(a => a.trim()).filter(Boolean);
+    const isEdit = editingRoute !== null;
 
     try {
       if (formMode === 'single') {
-        // Create as direct alias
         const payload = {
           name: safeName,
           provider: singleProvider,
           model: singleModel
         };
-        await apiCall(`${API_BASE}/aliases`, 'POST', payload);
-        // Create additional aliases
-        for (const alias of extraAliases) {
-          if (alias !== safeName) {
-            await apiCall(`${API_BASE}/aliases`, 'POST', {
-              name: alias,
-              provider: singleProvider,
-              model: singleModel
-            }).catch(() => {});
+        if (isEdit) {
+          await apiCall(`${API_BASE}/aliases/${safeName}`, 'PATCH', { provider: singleProvider, model: singleModel });
+        } else {
+          await apiCall(`${API_BASE}/aliases`, 'POST', payload);
+          for (const alias of extraAliases) {
+            if (alias !== safeName) {
+              await apiCall(`${API_BASE}/aliases`, 'POST', { name: alias, provider: singleProvider, model: singleModel }).catch(() => {});
+            }
           }
         }
-        toastSuccess(`Single Model route "${formName}" created`);
+        toastSuccess(`Single Model route "${formName}" ${isEdit ? 'updated' : 'created'}`);
       } else if (formMode === 'fallback') {
-        // Create route group + alias
         const routePayload: any = {
-          name: safeName + '-route',
           strategy: 'fallback',
           targets: fbTargets.filter(t => t.provider && t.model).map(t => ({ provider: t.provider, model: t.model }))
         };
-        const routeResult = await apiCall(`${API_BASE}/routes`, 'POST', routePayload);
-        const routeId = routeResult.name || safeName + '-route';
-        
-        await apiCall(`${API_BASE}/aliases`, 'POST', {
-          name: safeName,
-          route: routeId
-        });
-        for (const alias of extraAliases) {
-          if (alias !== safeName) {
-            await apiCall(`${API_BASE}/aliases`, 'POST', { name: alias, route: routeId }).catch(() => {});
+        if (isEdit && editingRoute.internalId) {
+          await apiCall(`${API_BASE}/routes/${editingRoute.internalId}`, 'PATCH', routePayload);
+        } else {
+          routePayload.name = safeName + '-route';
+          const routeResult = await apiCall(`${API_BASE}/routes`, 'POST', routePayload);
+          const routeId = routeResult.name || safeName + '-route';
+          await apiCall(`${API_BASE}/aliases`, 'POST', { name: safeName, route: routeId });
+          for (const alias of extraAliases) {
+            if (alias !== safeName) {
+              await apiCall(`${API_BASE}/aliases`, 'POST', { name: alias, route: routeId }).catch(() => {});
+            }
           }
         }
-        toastSuccess(`Fallback route "${formName}" created`);
+        toastSuccess(`Fallback route "${formName}" ${isEdit ? 'updated' : 'created'}`);
       } else if (formMode === 'smart') {
         const routePayload: any = {
-          name: safeName + '-smart',
           strategy: 'smart',
           candidates: smartCandidates.filter(c => c.provider && c.model),
           smart: {
@@ -2174,19 +2204,20 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
             low_confidence_target: smartDefaultTarget || undefined
           }
         };
-        const routeResult = await apiCall(`${API_BASE}/routes`, 'POST', routePayload);
-        const routeId = routeResult.name || safeName + '-smart';
-        
-        await apiCall(`${API_BASE}/aliases`, 'POST', {
-          name: safeName,
-          route: routeId
-        });
-        for (const alias of extraAliases) {
-          if (alias !== safeName) {
-            await apiCall(`${API_BASE}/aliases`, 'POST', { name: alias, route: routeId }).catch(() => {});
+        if (isEdit && editingRoute.internalId) {
+          await apiCall(`${API_BASE}/routes/${editingRoute.internalId}`, 'PATCH', routePayload);
+        } else {
+          routePayload.name = safeName + '-smart';
+          const routeResult = await apiCall(`${API_BASE}/routes`, 'POST', routePayload);
+          const routeId = routeResult.name || safeName + '-smart';
+          await apiCall(`${API_BASE}/aliases`, 'POST', { name: safeName, route: routeId });
+          for (const alias of extraAliases) {
+            if (alias !== safeName) {
+              await apiCall(`${API_BASE}/aliases`, 'POST', { name: alias, route: routeId }).catch(() => {});
+            }
           }
         }
-        toastSuccess(`Smart route "${formName}" created in ${smartMode} mode`);
+        toastSuccess(`Smart route "${formName}" ${isEdit ? 'updated' : 'created'} in ${smartMode} mode`);
       }
       resetForm();
       fetchConfig();
@@ -2215,10 +2246,12 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
         <div className="glass-panel rounded-2xl border border-zinc-800 p-6 space-y-6">
           <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
             <h4 className="font-bold text-sm text-zinc-300">
-              {wizardStep === 1 && 'Step 1: Public Identity'}
-              {wizardStep === 2 && 'Step 2: Choose Routing Behavior'}
-              {wizardStep === 3 && `Step 3: Configure ${formMode === 'single' ? 'Single Model' : formMode === 'fallback' ? 'Fallback' : 'Smart'} Settings`}
-              {wizardStep === 4 && 'Step 4: Review & Save'}
+              {editingRoute ? 'Edit Route' : 'Create Route'}
+              {' · '}
+              {wizardStep === 1 && 'Public Identity'}
+              {wizardStep === 2 && 'Routing Behavior'}
+              {wizardStep === 3 && `Configure ${formMode === 'single' ? 'Single Model' : formMode === 'fallback' ? 'Fallback' : 'Smart'} Settings`}
+              {wizardStep === 4 && 'Review & Save'}
             </h4>
             <div className="text-xs text-zinc-500">Step {wizardStep} of 4</div>
           </div>
@@ -2571,6 +2604,13 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
                             </button>
                           </>
                         )}
+                        <button 
+                          onClick={() => handleEditRoute(route)}
+                          className="bg-zinc-700/50 hover:bg-zinc-600/50 text-zinc-400 border border-zinc-700 p-1.5 rounded-lg transition-colors"
+                          title="Edit"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </button>
                         <button 
                           onClick={() => handleDeleteRoute(route)}
                           className="bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 p-1.5 rounded-lg transition-colors"
