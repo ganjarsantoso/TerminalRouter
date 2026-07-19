@@ -272,7 +272,8 @@ export default function App() {
       }
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error?.message || `HTTP ${res.status} error`);
+        const msg = errData?.error?.message || errData?.message || `HTTP ${res.status} error`;
+        throw new Error(msg);
       }
       return res.json().catch(() => ({}));
     } catch (e: any) {

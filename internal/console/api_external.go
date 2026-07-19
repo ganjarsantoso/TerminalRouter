@@ -30,17 +30,13 @@ func (s *Server) handleExternalEvidenceSearch(w http.ResponseWriter, r *http.Req
 	svc := s.getExternalService()
 	cp, ok := svc.Search(r.Context(), providerID, modelID)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error":   "unknown_model",
-			"message": "Model " + id + " is not in the identity directory; add it or use a known model id.",
-		})
+		writeError(w, http.StatusNotFound, "unknown_model",
+			"Model "+id+" is not in the identity directory; add it or use a known model id.")
 		return
 	}
 	if cp == nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error":   "no_external_evidence",
-			"message": "No independent benchmark evidence found online for " + id,
-		})
+		writeError(w, http.StatusNotFound, "no_external_evidence",
+			"No independent benchmark evidence found online for "+id)
 		return
 	}
 	writeJSON(w, http.StatusOK, cp)
@@ -63,10 +59,8 @@ func (s *Server) handleExternalEvidenceProposal(w http.ResponseWriter, r *http.R
 
 	p, ok := svc.BuildProposal(r.Context(), providerID, modelID, current)
 	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]any{
-			"error":   "no_external_evidence",
-			"message": "No independent benchmark evidence found online for " + id,
-		})
+		writeError(w, http.StatusNotFound, "no_external_evidence",
+			"No independent benchmark evidence found online for "+id)
 		return
 	}
 	if err := svc.SaveProposal(*p); err != nil {
