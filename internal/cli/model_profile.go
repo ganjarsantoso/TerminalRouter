@@ -8,6 +8,10 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/termrouter/termrouter/internal/app"
 	"github.com/termrouter/termrouter/internal/config"
+	"github.com/termrouter/termrouter/internal/execution"
+	"github.com/termrouter/termrouter/internal/provider"
+	panthropic "github.com/termrouter/termrouter/internal/provider/anthropic"
+	"github.com/termrouter/termrouter/internal/provider/compatible"
 	"github.com/termrouter/termrouter/internal/smart"
 )
 
@@ -50,7 +54,7 @@ func modelAssessRun() *cobra.Command {
 		Short: "Run a self-assessment for a model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, store, _, err := app.LoadRuntime(mustHome())
+			cfg, _, store, creds, err := app.LoadRuntime(mustHome())
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -72,7 +76,12 @@ func modelAssessRun() *cobra.Command {
 			credCheck := func(providerID string) bool { return true }
 			provCheck := func(providerID, modelID string) (bool, bool, bool) { return true, true, true }
 			ps := smart.NewProfileStore(smart.ProfilesFromConfig(cfg), true)
-			svc := smart.NewModelAssessmentService(store, credCheck, provCheck, ps)
+			reg := provider.NewRegistry()
+			reg.Register(compatible.NewOpenAI())
+			reg.Register(compatible.NewCompatible())
+			reg.Register(panthropic.New())
+			coord := execution.New(reg, creds, store, nil)
+			svc := smart.NewModelAssessmentService(store, credCheck, provCheck, ps, coord, cfg)
 
 			rec, err := svc.Start(mustSplitProvider(id), mustSplitModel(id), d, catList, nil)
 			if err != nil {

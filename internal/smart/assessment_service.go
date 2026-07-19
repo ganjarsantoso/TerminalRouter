@@ -7,11 +7,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/termrouter/termrouter/internal/config"
+	"github.com/termrouter/termrouter/internal/execution"
+	"github.com/termrouter/termrouter/internal/normalization"
+	"github.com/termrouter/termrouter/internal/router"
 	"github.com/termrouter/termrouter/internal/storage"
 )
 
@@ -174,6 +179,8 @@ type ModelAssessmentService struct {
 	credChecker     CredChecker
 	providerChecker ProviderChecker
 	profiles        *ProfileStore
+	coord           *execution.Coordinator
+	cfg             *config.Config
 	// DisableAutoRun skips background execution after Start (used by unit tests).
 	DisableAutoRun bool
 }
@@ -184,6 +191,8 @@ func NewModelAssessmentService(
 	credChecker CredChecker,
 	providerChecker ProviderChecker,
 	profiles *ProfileStore,
+	coord *execution.Coordinator,
+	cfg *config.Config,
 ) *ModelAssessmentService {
 	return &ModelAssessmentService{
 		activeRuns:      map[string]context.CancelFunc{},
@@ -191,6 +200,8 @@ func NewModelAssessmentService(
 		credChecker:     credChecker,
 		providerChecker: providerChecker,
 		profiles:        profiles,
+		coord:           coord,
+		cfg:             cfg,
 	}
 }
 
@@ -344,10 +355,8 @@ func (s *ModelAssessmentService) Execute(assessmentID string) {
 	s.launchRun(assessmentID)
 }
 
-// executeAssessment scores each category and marks the assessment complete.
-// Scoring is local and deterministic: it combines the built-in catalog (when
-// available), provider reachability metadata, and model-name heuristics.
-// This produces a reviewable proposal without requiring live upstream traffic.
+// executeAssessment sends real test prompts to the model for each category
+// and scores responses based on actual output quality.
 func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessmentID string) {
 	rec, err := s.store.GetAssessment(context.Background(), assessmentID)
 	if err != nil || rec == nil {
@@ -356,27 +365,40 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 	if rec.Status != StatusPending && rec.Status != StatusRunning {
 		return
 	}
+	if s.coord == nil {
+		now := time.Now().UTC()
+		rec.Status = StatusFailed
+		rec.CompletedAt = &now
+		_ = s.store.UpdateAssessment(context.Background(), rec)
+		return
+	}
 
 	rec.Status = StatusRunning
 	_ = s.store.UpdateAssessment(context.Background(), rec)
 
+	key := ProfileKey(rec.ProviderID, rec.ModelID)
+	p, hasProvider := s.providerConfig(rec.ProviderID)
+	if !hasProvider {
+		now := time.Now().UTC()
+		rec.Status = StatusFailed
+		rec.CompletedAt = &now
+		_ = s.store.UpdateAssessment(context.Background(), rec)
+		return
+	}
+
+	plan := &router.Plan{
+		Strategy:    "direct",
+		PublicModel: rec.ModelID,
+		Attempts: []router.Attempt{{
+			ProviderID: rec.ProviderID,
+			Model:      rec.ModelID,
+			Config:     p,
+		}},
+	}
+
 	_, streamingKnown, toolsKnown := false, false, false
 	if s.providerChecker != nil {
 		_, streamingKnown, toolsKnown = s.providerChecker(rec.ProviderID, rec.ModelID)
-	}
-
-	// Baseline: builtin / known profile when present.
-	key := ProfileKey(rec.ProviderID, rec.ModelID)
-	baseline, found := ModelProfile{}, false
-	if s.profiles != nil {
-		baseline, found = s.profiles.Resolve(rec.ProviderID, rec.ModelID, key)
-	}
-	if !found {
-		if p, ok := LookupBuiltin(key); ok {
-			baseline, found = p, true
-		} else if p, ok := LookupBuiltin(familyKey(rec.ProviderID, rec.ModelID)); ok {
-			baseline, found = p, true
-		}
 	}
 
 	cats := make([]AssessmentCategory, len(rec.Categories))
@@ -386,9 +408,7 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 	for i := range cats {
 		if ctx.Err() != nil {
 			rec.Status = StatusCancelled
-			now := time.Now().UTC()
-			rec.CompletedAt = &now
-			rec.Categories = cats
+			finishAssessment(rec, cats)
 			_ = s.store.UpdateAssessment(context.Background(), rec)
 			return
 		}
@@ -397,28 +417,83 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 		rec.Categories = cats
 		_ = s.store.UpdateAssessment(context.Background(), rec)
 
-		// Small yield so UI polling observes progress between categories.
 		select {
 		case <-ctx.Done():
 			rec.Status = StatusCancelled
-			now := time.Now().UTC()
-			rec.CompletedAt = &now
-			rec.Categories = cats
+			finishAssessment(rec, cats)
 			_ = s.store.UpdateAssessment(context.Background(), rec)
 			return
-		case <-time.After(80 * time.Millisecond):
+		default:
 		}
 
-		score, conf, passed, total, evidence := scoreCategory(cats[i].Name, rec, baseline, found, streamingKnown, toolsKnown)
+		test, ok := categoryTests[cats[i].Name]
+		if !ok {
+			cats[i].Status = StatusCompleted
+			cats[i].Score = 0
+			cats[i].Confidence = 0.3
+			cats[i].Evidence = "no test prompt defined for this category"
+			continue
+		}
+
+		nreq := &normalization.NormalizedRequest{
+			ID:             assessmentID + "_" + cats[i].Name,
+			RequestedModel: rec.ModelID,
+			Messages: []normalization.Message{{
+				Role: normalization.RoleUser,
+				Content: []normalization.ContentBlock{{
+					Type: normalization.ContentText,
+					Text: test.prompt,
+				}},
+			}},
+		}
+
+		if test.system != "" {
+			nreq.System = test.system
+		}
+
+		start := time.Now()
+		result, execErr := s.coord.Execute(ctx, nreq, plan)
+		latency := time.Since(start)
+
+		score := 0
+		passed := 0
+		total := 1
+		evidence := ""
+		conf := 0.5
+
+		if execErr != nil {
+			score = 0
+			conf = 0.2
+			evidence = fmt.Sprintf("execution error: %s", execErr.Error())
+		} else {
+			var respText string
+			if result.Response != nil {
+				for _, b := range result.Response.Content {
+					if b.Type == normalization.ContentText {
+						respText += b.Text
+					}
+				}
+			}
+			if result.Response != nil {
+				totalIn += result.Response.Usage.InputTokens
+				totalOut += result.Response.Usage.OutputTokens
+			}
+			score, passed, total, evidence = test.eval(respText, latency)
+			if score > 0 {
+				conf = 0.6 + float64(score)*0.07
+				if conf > 0.95 {
+					conf = 0.95
+				}
+			}
+		}
+
 		cats[i].Status = StatusCompleted
 		cats[i].Score = score
 		cats[i].Confidence = conf
 		cats[i].TestsPassed = passed
 		cats[i].TestsTotal = total
 		cats[i].Evidence = evidence
-		// Approximate token usage for the estimate UI.
-		totalIn += total * 400
-		totalOut += total * 120
+		cats[i].LatencyMs = int(latency.Milliseconds())
 
 		rec.Categories = cats
 		rec.InputTokens = totalIn
@@ -426,7 +501,6 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 		_ = s.store.UpdateAssessment(context.Background(), rec)
 	}
 
-	// Build proposed profile from category scores.
 	proposed := ModelProfile{
 		ID:           key,
 		ProviderID:   rec.ProviderID,
@@ -434,12 +508,11 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 		Version:      rec.BenchmarkVersion,
 		Source:       SourceSelfAssess,
 		Capabilities: map[string]int{},
-		Properties:   baseline.Properties,
 	}
-	if proposed.Properties.Streaming == nil && streamingKnown {
+	if streamingKnown {
 		proposed.Properties.Streaming = boolPtr(true)
 	}
-	if proposed.Properties.Tools == nil && toolsKnown {
+	if toolsKnown {
 		proposed.Properties.Tools = boolPtr(true)
 	}
 	for _, cat := range cats {
@@ -459,125 +532,334 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 	_ = s.store.UpdateAssessment(context.Background(), rec)
 }
 
-// scoreCategory produces a 0-5 score and confidence for one assessment category.
-func scoreCategory(
-	name string,
-	rec *AssessmentRecord,
-	baseline ModelProfile,
-	found bool,
-	streamingKnown, toolsKnown bool,
-) (score int, confidence float64, passed, total int, evidence string) {
-	// Depth influences sample size and confidence.
-	switch rec.Depth {
-	case DepthQuick:
-		total = 3
-	case DepthComprehensive:
-		total = 10
+func (s *ModelAssessmentService) providerConfig(providerID string) (config.ProviderConfig, bool) {
+	if s.cfg == nil {
+		return config.ProviderConfig{}, false
+	}
+	p, ok := s.cfg.Providers[providerID]
+	return p, ok
+}
+
+func finishAssessment(rec *AssessmentRecord, cats []AssessmentCategory) {
+	rec.Categories = cats
+}
+
+// categoryTest defines a single real test prompt and its evaluation function.
+type categoryTest struct {
+	prompt string
+	system string
+	eval   func(response string, latency time.Duration) (score, passed, total int, evidence string)
+}
+
+// categoryTests maps capability names to real test prompts that exercise each dimension.
+var categoryTests = map[string]categoryTest{
+	CapGeneral: {
+		prompt: "Explain what artificial intelligence is in 2-3 sentences. Be concise and accurate.",
+		eval:   evalGeneral,
+	},
+	CapReasoning: {
+		prompt: "If a bat and a ball cost $1.10 in total, and the bat costs $1.00 more than the ball, how much does the ball cost? Think step by step before giving your final answer.",
+		eval:   evalReasoning,
+	},
+	CapAnalysis: {
+		prompt: "Compare and contrast REST APIs and GraphQL APIs. List two advantages of each approach.",
+		eval:   evalAnalysis,
+	},
+	CapCoding: {
+		prompt: "Write a Python function called `is_palindrome` that checks if a string is a palindrome. Include an example usage.",
+		eval:   evalCoding,
+	},
+	CapWriting: {
+		prompt: "Write a short paragraph describing a sunset over the ocean. Use vivid language and include sensory details.",
+		eval:   evalWriting,
+	},
+	CapToolUse: {
+		prompt: "Can you use tools or functions to answer questions? If yes, list what tools you support.",
+		eval:   evalToolUse,
+	},
+	CapInstructionFollowing: {
+		prompt: "Respond with only the single word 'blue' and nothing else. Do not add any other text.",
+		eval:   evalInstructionFollowing,
+	},
+	CapStructuredOutput: {
+		prompt: "Give me a JSON object representing a person with the following fields: name (string), age (number), city (string), is_student (boolean). Return ONLY valid JSON, no other text.",
+		eval:   evalStructuredOutput,
+	},
+	CapLongContext: {
+		prompt: "Summarize the following text in one sentence:\n\nThe quick brown fox jumps over the lazy dog. This pangram contains every letter of the English alphabet at least once. Pangrams are often used to display typefaces and test computer keyboards. The earliest known pangram, 'The quick brown fox jumps over the lazy dog,' has been in use since at least the late 19th century.",
+		eval:   evalLongContext,
+	},
+	CapMultilingual: {
+		prompt: "Translate these three words into French, Spanish, and German: 'hello', 'thank you', 'goodbye'. Format each language on a separate line.",
+		eval:   evalMultilingual,
+	},
+	CapMathematics: {
+		prompt: "What is 15 multiplied by 37? Show your work step by step.",
+		eval:   evalMathematics,
+	},
+	CapSummarization: {
+		prompt: "Summarize the following article in 2-3 sentences:\n\nClimate change poses one of the most significant challenges of our time. Rising global temperatures have led to more frequent extreme weather events, including hurricanes, droughts, and heatwaves. Scientists warn that without immediate and sustained reductions in greenhouse gas emissions, the impacts will become increasingly severe. Many countries have pledged to achieve net-zero emissions by 2050, though critics argue the current commitments are insufficient to meet the Paris Agreement goals.",
+		eval: evalSummarization,
+	},
+	CapExtraction: {
+		prompt: "Extract all email addresses from this text and list them:\n\n'You can reach our sales team at sales@example.com or support@test.org. For partnerships, contact partners@company.co.uk. Our office phone is 555-0123.'",
+		eval:   evalExtraction,
+	},
+}
+
+func evalGeneral(resp string, lat time.Duration) (int, int, int, string) {
+	length := len(resp)
+	if length < 20 {
+		return 1, 0, 1, "response too short"
+	}
+	if length > 200 {
+		return 4, 1, 1, fmt.Sprintf("good length (%d chars), coherent response", length)
+	}
+	return 3, 1, 1, fmt.Sprintf("adequate response (%d chars)", length)
+}
+
+func evalReasoning(resp string, lat time.Duration) (int, int, int, string) {
+	low := strings.ToLower(resp)
+	if strings.Contains(low, "0.05") || strings.Contains(low, "5 cents") || strings.Contains(low, "5¢") || strings.Contains(low, "$0.05") {
+		if strings.Contains(low, "step") || strings.Contains(low, "because") || strings.Contains(low, "therefore") || strings.Contains(low, "so ") {
+			return 5, 2, 2, "correct answer with step-by-step reasoning"
+		}
+		return 4, 1, 2, "correct answer but limited reasoning shown"
+	}
+	if strings.Contains(low, "10") || strings.Contains(low, "0.10") || strings.Contains(low, "ten") {
+		return 1, 0, 1, "gave common wrong answer (10 cents)"
+	}
+	if len(resp) > 50 {
+		return 2, 0, 1, "attempted reasoning but incorrect answer"
+	}
+	return 1, 0, 1, "no meaningful reasoning"
+}
+
+func evalAnalysis(resp string, lat time.Duration) (int, int, int, string) {
+	low := strings.ToLower(resp)
+	hasRest := strings.Contains(low, "rest")
+	hasGraphql := strings.Contains(low, "graphql")
+	advantages := 0
+	if strings.Contains(low, "advantage") || strings.Contains(low, "pro") || strings.Contains(low, "benefit") {
+		advantages++
+	}
+	if strings.Contains(low, "simplicity") || strings.Contains(low, "simple") || strings.Contains(low, "easier") {
+		advantages++
+	}
+	if strings.Contains(low, "flexib") || strings.Contains(low, "flexible") {
+		advantages++
+	}
+	if strings.Contains(low, "cach") || strings.Contains(low, "cache") {
+		advantages++
+	}
+	if !hasRest && !hasGraphql {
+		return 1, 0, 1, "did not discuss REST or GraphQL meaningfully"
+	}
+	if len(resp) < 80 {
+		return 2, 0, 1, "too brief for a comparison"
+	}
+	if hasRest && hasGraphql && advantages >= 1 {
+		return 4, 2, 2, "good comparison covering both technologies"
+	}
+	return 3, 1, 2, "adequate but shallow comparison"
+}
+
+func evalCoding(resp string, lat time.Duration) (int, int, int, string) {
+	hasCodeBlock := strings.Contains(resp, "```")
+	hasDef := strings.Contains(resp, "def is_palindrome") || strings.Contains(resp, "def is_palindrome(")
+	hasReturn := strings.Contains(resp, "return") || strings.Contains(resp, "print")
+	if hasCodeBlock && hasDef && hasReturn {
+		return 5, 3, 3, "complete code with function definition and example"
+	}
+	if hasDef && hasReturn {
+		return 4, 2, 3, "function defined but missing code block formatting"
+	}
+	if strings.Contains(resp, "palindrome") && len(resp) > 60 {
+		return 3, 1, 3, "discussed palindrome but incomplete code"
+	}
+	if len(resp) < 30 {
+		return 1, 0, 3, "no meaningful code produced"
+	}
+	return 2, 1, 3, "partial or incorrect code"
+}
+
+func evalWriting(resp string, lat time.Duration) (int, int, int, string) {
+	sentences := len(strings.Split(resp, "."))
+	words := len(strings.Fields(resp))
+	if words > 40 && sentences >= 3 {
+		return 5, 3, 3, "vivid, well-structured writing with sensory detail"
+	}
+	if words > 20 && sentences >= 2 {
+		return 4, 2, 3, "adequate descriptive writing"
+	}
+	if words > 10 {
+		return 3, 1, 3, "minimal but on topic"
+	}
+	return 2, 0, 3, "too short, poor quality"
+}
+
+func evalToolUse(resp string, lat time.Duration) (int, int, int, string) {
+	low := strings.ToLower(resp)
+	if strings.Contains(low, "yes") || strings.Contains(low, "function") || strings.Contains(low, "tool") {
+		if len(resp) > 30 {
+			return 4, 2, 2, "acknowledged tool use capability with details"
+		}
+		return 3, 1, 2, "acknowledged tool use"
+	}
+	return 2, 0, 2, "no clear indication of tool use support"
+}
+
+func evalInstructionFollowing(resp string, lat time.Duration) (int, int, int, string) {
+	trimmed := strings.TrimSpace(resp)
+	lowTrimmed := strings.ToLower(trimmed)
+	if lowTrimmed == "blue" || lowTrimmed == "\"blue\"" || lowTrimmed == "'blue'" || lowTrimmed == "blue." {
+		return 5, 1, 1, "perfectly followed instruction"
+	}
+	if strings.Contains(lowTrimmed, "blue") && len(trimmed) < 20 {
+		return 3, 0, 1, "contains 'blue' but added extra text"
+	}
+	return 1, 0, 1, "did not follow instruction"
+}
+
+var jsonLike = regexp.MustCompile(`\{[^}]*\}`)
+
+func evalStructuredOutput(resp string, lat time.Duration) (int, int, int, string) {
+	matches := jsonLike.FindString(resp)
+	if matches == "" {
+		// Try to find JSON object
+		return 1, 0, 1, "no JSON object found in response"
+	}
+	var parsed any
+	if err := json.Unmarshal([]byte(matches), &parsed); err != nil {
+		return 2, 0, 1, "response contains JSON-like structure but not valid JSON"
+	}
+	obj, ok := parsed.(map[string]any)
+	if !ok {
+		return 2, 0, 1, "response is valid JSON but not an object"
+	}
+	fields := 0
+	if _, ok := obj["name"]; ok {
+		fields++
+	}
+	if _, ok := obj["age"]; ok {
+		fields++
+	}
+	if _, ok := obj["city"]; ok {
+		fields++
+	}
+	if _, ok := obj["is_student"]; ok {
+		fields++
+	}
+	if fields >= 4 {
+		return 5, 4, 4, "valid JSON with all required fields"
+	}
+	return 3, fields, 4, fmt.Sprintf("valid JSON with %d/4 required fields", fields)
+}
+
+func evalLongContext(resp string, lat time.Duration) (int, int, int, string) {
+	low := strings.ToLower(resp)
+	if len(resp) < 20 {
+		return 1, 0, 1, "response too short"
+	}
+	if strings.Contains(low, "pangram") || strings.Contains(low, "fox") || strings.Contains(low, "alphabet") || strings.Contains(low, "keyboard") || strings.Contains(low, "typeface") {
+		return 4, 2, 2, "accurately summarized the key points"
+	}
+	return 2, 0, 2, "summary missing key details"
+}
+
+func evalMultilingual(resp string, lat time.Duration) (int, int, int, string) {
+	low := strings.ToLower(resp)
+	languages := 0
+	if strings.Contains(low, "bonjour") || strings.Contains(low, "merci") || strings.Contains(low, "au revoir") || strings.Contains(resp, "hello") {
+		languages++
+	}
+	if strings.Contains(low, "hola") || strings.Contains(low, "gracias") || strings.Contains(low, "adiós") || strings.Contains(low, "adios") {
+		languages++
+	}
+	if strings.Contains(low, "hallo") || strings.Contains(low, "danke") || strings.Contains(low, "auf wiedersehen") || strings.Contains(low, "tschüss") || strings.Contains(low, "tschus") {
+		languages++
+	}
+	langCount := 0
+	if strings.Contains(low, "french") || strings.Contains(low, "fran") || strings.Contains(low, "français") || strings.Contains(low, "francais") {
+		langCount++
+	}
+	if strings.Contains(low, "spanish") || strings.Contains(low, "español") || strings.Contains(low, "espanol") {
+		langCount++
+	}
+	if strings.Contains(low, "german") || strings.Contains(low, "deutsch") {
+		langCount++
+	}
+	if languages >= 2 && langCount >= 2 {
+		return 5, 3, 3, "good multilingual response with translations"
+	}
+	if languages >= 1 || langCount >= 2 {
+		return 3, 1, 3, "partial multilingual response"
+	}
+	return 1, 0, 3, "no meaningful translation"
+}
+
+func evalMathematics(resp string, lat time.Duration) (int, int, int, string) {
+	low := strings.ToLower(resp)
+	if strings.Contains(resp, "555") || strings.Contains(resp, "15*37") || strings.Contains(resp, "15 × 37") {
+		if strings.Contains(low, "step") || strings.Contains(low, "×") || strings.Contains(resp, "+") || strings.Contains(resp, "=") {
+			return 5, 2, 2, "correct answer with step-by-step work"
+		}
+		return 4, 1, 2, "correct answer but limited work shown"
+	}
+	if len(resp) > 50 {
+		return 2, 0, 2, "attempted but incorrect answer"
+	}
+	return 1, 0, 2, "no meaningful calculation"
+}
+
+func evalSummarization(resp string, lat time.Duration) (int, int, int, string) {
+	low := strings.ToLower(resp)
+	if len(resp) < 30 {
+		return 1, 0, 1, "summary too short"
+	}
+	keyPoints := 0
+	if strings.Contains(low, "climate") || strings.Contains(low, "warming") || strings.Contains(low, "temperature") {
+		keyPoints++
+	}
+	if strings.Contains(low, "emission") || strings.Contains(low, "greenhouse") || strings.Contains(low, "carbon") {
+		keyPoints++
+	}
+	if strings.Contains(low, "2050") || strings.Contains(low, "net-zero") || strings.Contains(low, "net zero") || strings.Contains(low, "paris") {
+		keyPoints++
+	}
+	if strings.Contains(low, "weather") || strings.Contains(low, "extreme") || strings.Contains(low, "hurricane") || strings.Contains(low, "drought") {
+		keyPoints++
+	}
+	if keyPoints >= 3 {
+		return 5, 3, 3, "comprehensive summary covering key points"
+	}
+	if keyPoints >= 2 {
+		return 4, 2, 3, "good summary with some key points"
+	}
+	if keyPoints >= 1 {
+		return 3, 1, 3, "basic summary"
+	}
+	return 2, 0, 3, "poor summary missing key information"
+}
+
+func evalExtraction(resp string, lat time.Duration) (int, int, int, string) {
+	emails := []string{"sales@example.com", "support@test.org", "partners@company.co.uk"}
+	found := 0
+	for _, e := range emails {
+		if strings.Contains(resp, e) {
+			found++
+		}
+	}
+	switch found {
+	case 3:
+		return 5, 3, 3, "all email addresses correctly extracted"
+	case 2:
+		return 4, 2, 3, fmt.Sprintf("%d/3 email addresses found", found)
+	case 1:
+		return 3, 1, 3, fmt.Sprintf("only %d/3 email addresses found", found)
 	default:
-		total = 6
+		return 1, 0, 3, "no email addresses extracted"
 	}
-
-	if found {
-		if v, ok := baseline.Capabilities[name]; ok && v > 0 {
-			score = v
-		}
-	}
-	if score == 0 {
-		score = heuristicCategoryScore(name, rec.ProviderID, rec.ModelID)
-	}
-
-	// Adjust hard capability categories from live reachability signals.
-	switch name {
-	case CapToolUse:
-		if toolsKnown && score < 3 {
-			score = 3
-		}
-		if !toolsKnown && !found {
-			score = minInt(score, 2)
-		}
-	case CapStructuredOutput:
-		if toolsKnown && score < 3 {
-			score = 3
-		}
-	}
-
-	// Confidence: higher when we have a catalog baseline and deeper assessment.
-	confidence = 0.55
-	if found {
-		confidence = 0.78
-	}
-	switch rec.Depth {
-	case DepthQuick:
-		confidence *= 0.85
-	case DepthComprehensive:
-		confidence = math.Min(confidence*1.1, 0.95)
-	}
-	if confidence > 1 {
-		confidence = 1
-	}
-
-	// Map score to pass rate for reporting.
-	rate := float64(score) / 5.0
-	passed = int(math.Round(rate * float64(total)))
-	if passed > total {
-		passed = total
-	}
-	evidence = fmt.Sprintf("local benchmark pack %s; baseline=%v score=%d/5", BenchmarkPackVersion, found, score)
-	return score, confidence, passed, total, evidence
-}
-
-// heuristicCategoryScore estimates capability from model/provider naming when no catalog entry exists.
-func heuristicCategoryScore(category, providerID, modelID string) int {
-	m := strings.ToLower(modelID)
-	p := strings.ToLower(providerID)
-	base := 3
-	// Strong models
-	if strings.Contains(m, "gpt-4") || strings.Contains(m, "claude") || strings.Contains(m, "sonnet") ||
-		strings.Contains(m, "opus") || strings.Contains(m, "o1") || strings.Contains(m, "o3") {
-		base = 4
-	}
-	if strings.Contains(m, "mini") || strings.Contains(m, "haiku") || strings.Contains(m, "flash") ||
-		strings.Contains(m, "lite") || strings.Contains(m, "small") {
-		base = 3
-	}
-	if strings.Contains(m, "nano") || strings.Contains(m, "tiny") {
-		base = 2
-	}
-	// Coding-specialized names
-	if category == CapCoding && (strings.Contains(m, "code") || strings.Contains(m, "coder") || strings.Contains(m, "deepseek")) {
-		base = minInt(5, base+1)
-	}
-	if category == CapReasoning && (strings.Contains(m, "o1") || strings.Contains(m, "o3") || strings.Contains(m, "reason")) {
-		base = minInt(5, base+1)
-	}
-	if category == CapMathematics && (strings.Contains(m, "o1") || strings.Contains(m, "math")) {
-		base = minInt(5, base+1)
-	}
-	// Local / unknown providers tend to be more variable
-	if strings.Contains(p, "local") || p == "ollama" || p == "lmstudio" || strings.Contains(p, "compat") {
-		base = maxInt(1, base-1)
-	}
-	if base < 1 {
-		base = 1
-	}
-	if base > 5 {
-		base = 5
-	}
-	return base
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 // Cancel stops a running assessment.

@@ -294,12 +294,13 @@ const (
 
 // AssessmentCategory is a single benchmark category.
 type AssessmentCategory struct {
-	Name       string           `json:"name"`
-	Status     AssessmentStatus `json:"status"`
-	Score      int              `json:"score"`               // 0-5
-	Confidence float64          `json:"confidence"`          // 0.0-1.0
-	TestsPassed int             `json:"tests_passed"`
-	TestsTotal  int             `json:"tests_total"`
+	Name        string           `json:"name"`
+	Status      AssessmentStatus `json:"status"`
+	Score       int              `json:"score"`               // 0-5
+	Confidence  float64          `json:"confidence"`          // 0.0-1.0
+	TestsPassed int              `json:"tests_passed"`
+	TestsTotal  int              `json:"tests_total"`
+	LatencyMs   int              `json:"latency_ms,omitempty"`
 	Evidence    string           `json:"evidence,omitempty"` // summary text
 }
 

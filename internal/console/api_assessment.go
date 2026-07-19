@@ -5,6 +5,10 @@ import (
 	"strings"
 
 	"github.com/termrouter/termrouter/internal/config"
+	"github.com/termrouter/termrouter/internal/execution"
+	"github.com/termrouter/termrouter/internal/provider"
+	"github.com/termrouter/termrouter/internal/provider/anthropic"
+	"github.com/termrouter/termrouter/internal/provider/compatible"
 	"github.com/termrouter/termrouter/internal/smart"
 )
 
@@ -54,7 +58,14 @@ func (s *Server) getAssessmentService() *smart.ModelAssessmentService {
 		}
 		return false, false, false
 	}
-	return smart.NewModelAssessmentService(s.Store, credCheck, providerCheck, ps)
+
+	reg := provider.NewRegistry()
+	reg.Register(compatible.NewOpenAI())
+	reg.Register(compatible.NewCompatible())
+	reg.Register(anthropic.New())
+	coord := execution.New(reg, s.Creds, s.Store, s.Log)
+
+	return smart.NewModelAssessmentService(s.Store, credCheck, providerCheck, ps, coord, rc.Cfg)
 }
 
 func (s *Server) handleAssessmentPreflight(w http.ResponseWriter, r *http.Request) {
