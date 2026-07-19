@@ -25,8 +25,264 @@ func newModelProfileCmd() *cobra.Command {
 		modelProfileSet(),
 		modelProfileReset(),
 		modelProfileValidate(),
+		modelAssessCmd(),
 	)
 	return cmd
+}
+
+func modelAssessCmd() *cobra.Command {
+	cmd := &cobra.Command{Use: "assess", Short: "Run or manage model self-assessments"}
+	cmd.AddCommand(
+		modelAssessRun(),
+		modelAssessShow(),
+		modelAssessApply(),
+		modelAssessCancel(),
+		modelAssessHistory(),
+	)
+	return cmd
+}
+
+func modelAssessRun() *cobra.Command {
+	var depth string
+	var categories string
+	cmd := &cobra.Command{
+		Use:   "run [provider/model]",
+		Short: "Run a self-assessment for a model",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, _, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+
+			id := args[0]
+			d := smart.AssessmentDepth(depth)
+			if d == "" {
+				d = smart.DepthStandard
+			}
+
+			catList := []string{}
+			if categories != "" {
+				for _, c := range strings.Split(categories, ",") {
+					catList = append(catList, strings.TrimSpace(c))
+				}
+			}
+
+			credCheck := func(providerID string) bool { return true }
+			provCheck := func(providerID, modelID string) (bool, bool, bool) { return true, true, true }
+			ps := smart.NewProfileStore(smart.ProfilesFromConfig(cfg), true)
+			svc := smart.NewModelAssessmentService(store, credCheck, provCheck, ps)
+
+			rec, err := svc.Start(mustSplitProvider(id), mustSplitModel(id), d, catList, nil)
+			if err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			return printOut(fmt.Sprintf("Assessment %s started (depth=%s)", rec.AssessmentID, depth), rec)
+		},
+	}
+	cmd.Flags().StringVar(&depth, "depth", "standard", "Assessment depth: quick, standard, comprehensive")
+	cmd.Flags().StringVar(&categories, "categories", "", "Comma-separated category list")
+	return cmd
+}
+
+func modelAssessShow() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show [assessment-id]",
+		Short: "Show a model assessment result",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+			aid := args[0]
+			data, err := store.GetAssessment(nil, aid)
+			if err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			if data == nil {
+				return Exit(ExitGeneral, fmt.Errorf("assessment %s not found", aid))
+			}
+			rec := smart.FromStorage(data)
+			if flagJSON {
+				return printJSON(rec)
+			}
+			fmt.Printf("Assessment: %s\nStatus: %s\nDepth: %s\nBenchmark: %s\nConfidence: %.2f\n",
+				rec.AssessmentID, rec.Status, rec.Depth, rec.BenchmarkVersion, rec.Confidence)
+			fmt.Println("\nCategories:")
+			for _, cat := range rec.Categories {
+				fmt.Printf("  %-22s score=%d confidence=%.2f (%d/%d tests)\n",
+					cat.Name, cat.Score, cat.Confidence, cat.TestsPassed, cat.TestsTotal)
+			}
+			return nil
+		},
+	}
+}
+
+func modelAssessApply() *cobra.Command {
+	var acceptedFields string
+	var preserveOverrides bool
+	cmd := &cobra.Command{
+		Use:   "apply [assessment-id]",
+		Short: "Apply an assessment proposal to the model profile",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, paths, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+			aid := args[0]
+
+			data, err := store.GetAssessment(nil, aid)
+			if err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			if data == nil {
+				return Exit(ExitGeneral, fmt.Errorf("assessment %s not found", aid))
+			}
+			rec := smart.FromStorage(data)
+
+			accepted := []string{}
+			if acceptedFields != "" {
+				for _, f := range strings.Split(acceptedFields, ",") {
+					accepted = append(accepted, strings.TrimSpace(f))
+				}
+			}
+
+			// Apply proposal directly to config
+			if rec.ProposedProfile == nil {
+				return Exit(ExitGeneral, fmt.Errorf("assessment has no proposed profile"))
+			}
+			prop := rec.ProposedProfile
+			key := smart.ProfileKey(rec.ProviderID, rec.ModelID)
+
+			if cfg.ModelProfiles == nil {
+				cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
+			}
+			mp := cfg.ModelProfiles[key]
+			if mp.Capabilities == nil {
+				mp.Capabilities = map[string]int{}
+			}
+			for k, v := range prop.Capabilities {
+				if len(accepted) == 0 || containsString(accepted, k) {
+					mp.Capabilities[k] = v
+				}
+			}
+			mp.Source = smart.SourceSelfAssess
+			mp.Version = rec.BenchmarkVersion
+			if preserveOverrides {
+				existing := cfg.ModelProfiles[key]
+				for k, v := range existing.Capabilities {
+					if _, ok := mp.Capabilities[k]; ok && existing.Source == smart.SourceUser {
+						mp.Capabilities[k] = v
+					}
+				}
+			}
+			cfg.ModelProfiles[key] = mp
+
+			if err := config.Save(paths.Config, cfg); err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			return printOut(fmt.Sprintf("Assessment %s applied to %s", aid, key), map[string]string{"applied": aid, "profile": key})
+		},
+	}
+	cmd.Flags().StringVar(&acceptedFields, "fields", "", "Comma-separated fields to accept (empty = all)")
+	cmd.Flags().BoolVar(&preserveOverrides, "preserve-overrides", true, "Preserve existing user overrides")
+	return cmd
+}
+
+func modelAssessCancel() *cobra.Command {
+	return &cobra.Command{
+		Use:   "cancel [assessment-id]",
+		Short: "Cancel a running assessment",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+			aid := args[0]
+			data, err := store.GetAssessment(nil, aid)
+			if err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			if data == nil {
+				return Exit(ExitGeneral, fmt.Errorf("assessment %s not found", aid))
+			}
+			data.Status = string(smart.StatusCancelled)
+			if err := store.UpdateAssessment(nil, data); err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			return printOut(fmt.Sprintf("Assessment %s cancelled", aid), map[string]string{"cancelled": aid})
+		},
+	}
+}
+
+func modelAssessHistory() *cobra.Command {
+	return &cobra.Command{
+		Use:   "history [provider/model]",
+		Short: "Show assessment history for a model",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			_, _, store, _, err := app.LoadRuntime(mustHome())
+			if err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			defer store.Close()
+			provider := mustSplitProvider(args[0])
+			model := mustSplitModel(args[0])
+			list, err := store.ListAssessments(nil, provider, model)
+			if err != nil {
+				return Exit(ExitGeneral, err)
+			}
+			if flagJSON {
+				return printJSON(list)
+			}
+			if len(list) == 0 {
+				fmt.Println("No assessments found for", args[0])
+				return nil
+			}
+			for _, a := range list {
+				applied := ""
+				if a.AppliedAt != nil {
+					applied = "applied"
+				}
+				fmt.Printf("%s  depth=%s  status=%s  confidence=%.2f  %s\n",
+					a.AssessmentID, a.Depth, a.Status, a.OverallConfidence, applied)
+			}
+			return nil
+		},
+	}
+}
+
+func mustSplitProvider(id string) string {
+	provider, _ := splitProfileIDParts(id)
+	return provider
+}
+
+func mustSplitModel(id string) string {
+	_, model := splitProfileIDParts(id)
+	return model
+}
+
+func splitProfileIDParts(id string) (string, string) {
+	if i := strings.IndexByte(id, '/'); i > 0 {
+		return id[:i], id[i+1:]
+	}
+	return "", id
+}
+
+func containsString(slice []string, s string) bool {
+	for _, v := range slice {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }
 
 func modelProfileList() *cobra.Command {

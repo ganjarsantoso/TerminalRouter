@@ -43,11 +43,15 @@ const (
 
 // Source identifies where a profile field came from.
 const (
-	SourceBuiltin  = "builtin"
-	SourceUser     = "user"
-	SourceObserved = "observed"
-	SourceUnknown  = "unknown"
+	SourceBuiltin     = "builtin"
+	SourceUser        = "user"
+	SourceObserved    = "observed"
+	SourceSelfAssess  = "self-assessment"
+	SourceUnknown     = "unknown"
 )
+
+const AssessmentVersion = "assessment-v1"
+const BenchmarkPackVersion = "benchmark-v1"
 
 // Smart modes.
 const (
@@ -253,3 +257,167 @@ type Override struct {
 	Reclassify   bool
 	RequireCaps  []string // e.g. coding, tools
 }
+
+// AssessmentDepth defines how thorough an assessment is.
+type AssessmentDepth string
+
+const (
+	DepthQuick        AssessmentDepth = "quick"
+	DepthStandard     AssessmentDepth = "standard"
+	DepthComprehensive AssessmentDepth = "comprehensive"
+)
+
+// AssessmentStatus tracks the lifecycle of an assessment.
+type AssessmentStatus string
+
+const (
+	StatusPending     AssessmentStatus = "pending"
+	StatusRunning     AssessmentStatus = "running"
+	StatusCompleted   AssessmentStatus = "completed"
+	StatusFailed      AssessmentStatus = "failed"
+	StatusCancelled   AssessmentStatus = "cancelled"
+	StatusPartial     AssessmentStatus = "partial"
+)
+
+// ProfileStatus indicates the overall profiled state of a model.
+type ProfileStatus string
+
+const (
+	ProfileNotProfiled       ProfileStatus = "not_profiled"
+	ProfileBuiltIn           ProfileStatus = "built_in"
+	ProfileAssessmentAvail   ProfileStatus = "assessment_available"
+	ProfileAssessed          ProfileStatus = "assessed"
+	ProfileUserModified      ProfileStatus = "user_modified"
+	ProfileAssessmentOutdated ProfileStatus = "assessment_outdated"
+	ProfileAssessmentFailed  ProfileStatus = "assessment_failed"
+)
+
+// AssessmentCategory is a single benchmark category.
+type AssessmentCategory struct {
+	Name       string           `json:"name"`
+	Status     AssessmentStatus `json:"status"`
+	Score      int              `json:"score"`               // 0-5
+	Confidence float64          `json:"confidence"`          // 0.0-1.0
+	TestsPassed int             `json:"tests_passed"`
+	TestsTotal  int             `json:"tests_total"`
+	Evidence    string           `json:"evidence,omitempty"` // summary text
+}
+
+// AssessmentPlan describes the tests to run.
+type AssessmentPlan struct {
+	ProviderID      string          `json:"provider_id"`
+	ModelID         string          `json:"model_id"`
+	Depth           AssessmentDepth `json:"depth"`
+	Categories      []string        `json:"categories"`
+	MaxRequests     int             `json:"max_requests"`
+	MaxTokens       int             `json:"max_tokens"`
+	MaxCost         float64         `json:"max_cost,omitempty"`
+	RequestTimeout  time.Duration   `json:"request_timeout_ns,omitempty"`
+	OverallTimeout  time.Duration   `json:"overall_timeout_ns,omitempty"`
+	Concurrency     int             `json:"concurrency"`
+}
+
+// AssessmentEstimate contains preflight usage estimates.
+type AssessmentEstimate struct {
+	ProviderID       string   `json:"provider_id"`
+	ModelID          string   `json:"model_id"`
+	Depth            AssessmentDepth `json:"depth"`
+	RequestCount     int      `json:"request_count"`
+	EstimatedTokens  int      `json:"estimated_tokens"`
+	EstimatedCost    float64  `json:"estimated_cost,omitempty"`
+	CostKnown        bool     `json:"cost_known"`
+	LeavesLocal      bool     `json:"leaves_local"`
+	ToolTestsRun     bool     `json:"tool_tests_run"`
+	StreamingTests   bool     `json:"streaming_tests"`
+	Categories       []string `json:"categories"`
+}
+
+// AssessmentRecord is a persisted assessment run.
+type AssessmentRecord struct {
+	AssessmentID       string            `json:"assessment_id"`
+	ProviderID         string            `json:"provider_id"`
+	ModelID            string            `json:"model_id"`
+	ConnectionFingerprint string         `json:"connection_fingerprint,omitempty"`
+	Status             AssessmentStatus  `json:"status"`
+	Depth              AssessmentDepth   `json:"depth"`
+	BenchmarkVersion   string            `json:"benchmark_version"`
+	ScoringVersion     string            `json:"scoring_version"`
+	Categories         []AssessmentCategory `json:"categories"`
+	StartedAt          *time.Time        `json:"started_at,omitempty"`
+	CompletedAt        *time.Time        `json:"completed_at,omitempty"`
+	EstimatedTokens    int               `json:"estimated_tokens"`
+	InputTokens        int               `json:"input_tokens"`
+	OutputTokens       int               `json:"output_tokens"`
+	EstimatedCost      float64           `json:"estimated_cost,omitempty"`
+	ActualCost         float64           `json:"actual_cost,omitempty"`
+	Confidence         float64           `json:"confidence"` // overall
+	ProposedProfile    *ModelProfile     `json:"proposed_profile,omitempty"`
+	AppliedAt          *time.Time        `json:"applied_at,omitempty"`
+	AppliedFields      []string          `json:"applied_fields,omitempty"`
+	Error              string            `json:"error,omitempty"`
+}
+
+// AssessmentProposal is the reviewable output of an assessment.
+type AssessmentProposal struct {
+	AssessmentID      string                  `json:"assessment_id"`
+	ProviderID        string                  `json:"provider_id"`
+	ModelID           string                  `json:"model_id"`
+	Depth             AssessmentDepth         `json:"depth"`
+	CurrentProfile    *ModelProfile           `json:"current_profile"`
+	ProposedProfile   *ModelProfile           `json:"proposed_profile"`
+	Differences       []ProfileFieldDiff      `json:"differences"`
+	CategoryResults   []AssessmentCategory    `json:"category_results"`
+	OverallConfidence float64                 `json:"overall_confidence"`
+	AffectedRoutes    []string                `json:"affected_routes,omitempty"`
+	BenchmarkVersion  string                  `json:"benchmark_version"`
+	CreatedAt         time.Time               `json:"created_at"`
+}
+
+// ProfileFieldDiff shows a before/after for one profile field.
+type ProfileFieldDiff struct {
+	Field          string  `json:"field"`
+	CurrentValue   any     `json:"current_value"`
+	ProposedValue  any     `json:"proposed_value"`
+	Source         string  `json:"source"`
+	Confidence     float64 `json:"confidence"`
+	Recommended    bool    `json:"recommended"`
+}
+
+// ApplyProposalRequest is the payload to apply an assessment proposal.
+type ApplyProposalRequest struct {
+	AssessmentID         string   `json:"assessment_id"`
+	AcceptedFields       []string `json:"accepted_fields"` // empty = all
+	PreserveUserOverrides bool    `json:"preserve_user_overrides"`
+}
+
+// AssessmentSummary is a lightweight row for listing.
+type AssessmentSummary struct {
+	AssessmentID      string           `json:"assessment_id"`
+	ProviderID        string           `json:"provider_id"`
+	ModelID           string           `json:"model_id"`
+	Status            AssessmentStatus `json:"status"`
+	Depth             AssessmentDepth  `json:"depth"`
+	BenchmarkVersion  string           `json:"benchmark_version"`
+	OverallConfidence float64          `json:"overall_confidence"`
+	StartedAt         *time.Time       `json:"started_at,omitempty"`
+	CompletedAt       *time.Time       `json:"completed_at,omitempty"`
+	AppliedAt         *time.Time       `json:"applied_at,omitempty"`
+	EstimatedCost     float64          `json:"estimated_cost,omitempty"`
+}
+
+// AssessmentPreflightResult contains preflight check outcomes.
+type AssessmentPreflightResult struct {
+	Eligible           bool     `json:"eligible"`
+	Reasons            []string `json:"reasons,omitempty"`
+	ProviderID         string   `json:"provider_id"`
+	ModelID            string   `json:"model_id"`
+	ProviderEnabled    bool     `json:"provider_enabled"`
+	CredentialAvailable bool    `json:"credential_available"`
+	ModelReachable     bool     `json:"model_reachable"`
+	StreamingKnown     bool     `json:"streaming_known"`
+	ToolsEndpointKnown bool     `json:"tools_endpoint_known"`
+	AssessmentReady    bool     `json:"assessment_ready"`
+	ConflictingRun     bool     `json:"conflicting_run"`
+}
+
+

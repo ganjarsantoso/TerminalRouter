@@ -1501,6 +1501,16 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
   const [latencyTier, setLatencyTier] = useState(1);
   const [privacy, setPrivacy] = useState('cloud');
 
+  // Self-assessment state
+  const [assessView, setAssessView] = useState<'none' | 'setup' | 'running' | 'review'>('none');
+  const [assessDepth, setAssessDepth] = useState('standard');
+  const [assessCategories, setAssessCategories] = useState<string[]>([]);
+  const [assessEstimate, setAssessEstimate] = useState<any>(null);
+  const [assessId, setAssessId] = useState<string | null>(null);
+  const [assessStatus, setAssessStatus] = useState<any>(null);
+  const [assessProposal, setAssessProposal] = useState<any>(null);
+  const [assessLoading, setAssessLoading] = useState(false);
+
   // Load properties when selectedModel changes
   useEffect(() => {
     if (!selectedModel) return;
@@ -1555,6 +1565,93 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
     } catch (e) {}
   };
 
+  // Self-assessment handlers
+  const handlePreflightEstimate = async () => {
+    if (!selectedModel) return;
+    setAssessLoading(true);
+    try {
+      const est = await apiCall(`${API_BASE}/model-profiles/${selectedModel}/assessment/estimate`, 'POST', {
+        depth: assessDepth, categories: assessCategories.length > 0 ? assessCategories : undefined
+      });
+      setAssessEstimate(est);
+    } catch (e) {}
+    setAssessLoading(false);
+  };
+
+  const handleStartAssessment = async () => {
+    if (!selectedModel) return;
+    setAssessLoading(true);
+    try {
+      const res = await apiCall(`${API_BASE}/model-profiles/${selectedModel}/assessments`, 'POST', {
+        depth: assessDepth, categories: assessCategories.length > 0 ? assessCategories : undefined
+      });
+      setAssessId(res.assessment_id);
+      setAssessView('running');
+      setAssessStatus(res);
+      toastSuccess(`Assessment ${res.assessment_id} started`);
+      
+      // Poll for completion
+      const poll = setInterval(async () => {
+        try {
+          const status = await apiCall(`${API_BASE}/model-assessments/${res.assessment_id}`);
+          setAssessStatus(status);
+          if (status.status === 'completed' || status.status === 'failed' || status.status === 'cancelled') {
+            clearInterval(poll);
+            if (status.status === 'completed') {
+              const prop = await apiCall(`${API_BASE}/model-assessments/${res.assessment_id}/proposal`);
+              setAssessProposal(prop);
+              setAssessView('review');
+            }
+          }
+        } catch (e) { clearInterval(poll); }
+      }, 2000);
+    } catch (e) {}
+    setAssessLoading(false);
+  };
+
+  const handleStartAssessSetup = async () => {
+    setAssessDepth('standard');
+    setAssessCategories([]);
+    setAssessEstimate(null);
+    setAssessView('setup');
+    // Get estimate
+    setTimeout(handlePreflightEstimate, 100);
+  };
+
+  const handleApplyProposal = async (acceptedFields?: string[]) => {
+    if (!assessId) return;
+    setAssessLoading(true);
+    try {
+      await apiCall(`${API_BASE}/model-assessments/${assessId}/apply`, 'POST', {
+        accepted_fields: acceptedFields || [],
+        preserve_user_overrides: true
+      });
+      toastSuccess('Assessment proposal applied');
+      setAssessView('none');
+      setAssessProposal(null);
+      setAssessId(null);
+      fetchConfig();
+    } catch (e) {}
+    setAssessLoading(false);
+  };
+
+  const handleCancelAssessment = async () => {
+    if (!assessId) return;
+    try {
+      await apiCall(`${API_BASE}/model-assessments/${assessId}/cancel`, 'POST', {});
+      toastSuccess('Assessment cancelled');
+      setAssessView('none');
+    } catch (e) {}
+  };
+
+  const handleDismissAssessment = () => {
+    setAssessView('none');
+    setAssessProposal(null);
+    setAssessId(null);
+    setAssessStatus(null);
+    setAssessEstimate(null);
+  };
+
   // Compile full catalog of configured or discovered models
   const configuredModels = new Set<string>();
   Object.values(config.routes || {}).forEach((r: any) => {
@@ -1582,6 +1679,13 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
             allModels.map((m: string) => {
               const hasOverride = !!config.model_profiles?.[m];
               const isSelected = selectedModel === m;
+              const src = config.model_profiles?.[m]?.source || '';
+              const statusBadge = src === 'self-assessment' ? 'ASSESSED'
+                : src === 'user' ? 'MODIFIED'
+                : hasOverride ? 'PROFILED' : '';
+              const badgeColor = src === 'self-assessment' ? 'bg-indigo-950 text-indigo-400 border-indigo-900'
+                : src === 'user' ? 'bg-amber-950 text-amber-400 border-amber-900'
+                : 'bg-emerald-950 text-emerald-400 border-emerald-900';
               return (
                 <button
                   key={m}
@@ -1590,7 +1694,7 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
                 >
                   <span className="font-mono truncate">{m}</span>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    {hasOverride && <span className="bg-emerald-950 text-emerald-400 text-[8px] font-bold px-1 py-0.5 rounded border border-emerald-900">PROFILED</span>}
+                    {statusBadge && <span className={`text-[8px] font-bold px-1 py-0.5 rounded border ${badgeColor}`}>{statusBadge}</span>}
                     <ChevronRight className="h-3.5 w-3.5" />
                   </div>
                 </button>
@@ -1616,10 +1720,193 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
                 <p className="text-xs text-zinc-500 mt-1">Specify model scores (0-5) to inform the smart route task classifier.</p>
               </div>
               <div className="flex items-center gap-2">
+                <button onClick={handleStartAssessSetup} className="rounded-lg border border-indigo-600/40 hover:bg-indigo-600/10 px-3 py-1.5 text-xs text-indigo-400 flex items-center gap-1.5">
+                  <Play className="h-3 w-3" /> Assess Model
+                </button>
                 <button onClick={handleResetProfile} className="rounded-lg border border-zinc-800 hover:bg-zinc-900 px-3 py-1.5 text-xs text-zinc-400 hover:text-zinc-300">Reset Defaults</button>
                 <button onClick={handleSaveProfile} className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-3 py-1.5 text-xs font-semibold">Save Profile</button>
               </div>
             </div>
+            
+            {/* Assessment modals */}
+            {assessView === 'setup' && selectedModel && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-lg w-full mx-4 space-y-5 shadow-2xl">
+                  <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <h4 className="font-bold text-sm text-zinc-100">Self-Assessment Setup</h4>
+                    <button onClick={() => setAssessView('none')} className="text-zinc-500 hover:text-zinc-300 text-lg">&times;</button>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-semibold text-zinc-400 mb-2">Assessment Depth</label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {['quick', 'standard', 'comprehensive'].map(d => (
+                        <button key={d} onClick={() => { setAssessDepth(d); setTimeout(handlePreflightEstimate, 100); }}
+                          className={`p-3 rounded-xl border text-xs text-left transition-all ${assessDepth === d ? 'border-indigo-500 bg-indigo-500/10' : 'border-zinc-800 hover:border-zinc-700'}`}>
+                          <div className="font-bold text-zinc-200 capitalize mb-1">{d}</div>
+                          <div className="text-[10px] text-zinc-500">
+                            {d === 'quick' ? '1-3 min' : d === 'standard' ? '5-15 min' : '15-30 min'}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {assessEstimate && (
+                    <div className="bg-zinc-800/60 rounded-xl p-3 space-y-1.5 text-xs">
+                      <div className="flex justify-between text-zinc-300">
+                        <span>Estimated requests</span>
+                        <span className="font-mono">{assessEstimate.request_count}</span>
+                      </div>
+                      <div className="flex justify-between text-zinc-300">
+                        <span>Estimated tokens</span>
+                        <span className="font-mono">{assessEstimate.estimated_tokens?.toLocaleString()}</span>
+                      </div>
+                      <div className="flex justify-between text-zinc-300">
+                        <span>Estimated cost</span>
+                        <span className="font-mono">{assessEstimate.cost_known ? `$${assessEstimate.estimated_cost?.toFixed(4)}` : 'Unknown'}</span>
+                      </div>
+                      <div className="flex justify-between text-zinc-300">
+                        <span>Leaves local machine</span>
+                        <span className={assessEstimate.leaves_local ? 'text-amber-400' : 'text-emerald-400'}>{assessEstimate.leaves_local ? 'Yes' : 'No'}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 border-t border-zinc-800 pt-3">
+                    <button onClick={() => setAssessView('none')} className="rounded-lg border border-zinc-800 hover:bg-zinc-800 px-3 py-1.5 text-xs">Cancel</button>
+                    <button onClick={handleStartAssessment} disabled={assessLoading}
+                      className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-xs font-semibold disabled:opacity-50 flex items-center gap-1">
+                      {assessLoading && <RefreshCw className="h-3 w-3 animate-spin" />}
+                      Start Assessment
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {assessView === 'running' && assessStatus && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-md w-full mx-4 space-y-5 shadow-2xl">
+                  <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <h4 className="font-bold text-sm text-zinc-100 flex items-center gap-2">
+                      <RefreshCw className="h-4 w-4 animate-spin text-indigo-400" />
+                      Assessing {selectedModel}
+                    </h4>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-xs text-zinc-400">
+                      <span>Status</span>
+                      <span className="font-semibold text-indigo-400 capitalize">{assessStatus.status}</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-zinc-400">
+                      <span>Assessment ID</span>
+                      <span className="font-mono text-[10px]">{assessStatus.assessment_id}</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-zinc-400">
+                      <span>Depth</span>
+                      <span className="capitalize">{assessStatus.depth}</span>
+                    </div>
+                  </div>
+
+                  {assessStatus.categories?.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Categories</h5>
+                      {assessStatus.categories.map((cat: any) => (
+                        <div key={cat.name} className="flex items-center justify-between text-xs">
+                          <span className="text-zinc-300 capitalize">{cat.name.replace(/_/g, ' ')}</span>
+                          <span className={`flex items-center gap-1 ${
+                            cat.status === 'completed' ? 'text-emerald-400' :
+                            cat.status === 'running' ? 'text-indigo-400' :
+                            cat.status === 'pending' ? 'text-zinc-500' : 'text-amber-400'
+                          }`}>
+                            {cat.status === 'completed' && <CheckCircle className="h-3 w-3" />}
+                            {cat.status === 'running' && <RefreshCw className="h-3 w-3 animate-spin" />}
+                            {cat.status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 border-t border-zinc-800 pt-3">
+                    <button onClick={handleCancelAssessment} className="rounded-lg border border-rose-500/30 hover:bg-rose-500/10 px-3 py-1.5 text-xs text-rose-400">Cancel</button>
+                    <button onClick={() => setAssessView('none')} className="rounded-lg border border-zinc-800 hover:bg-zinc-800 px-3 py-1.5 text-xs">Run in Background</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {assessView === 'review' && assessProposal && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm overflow-y-auto py-8">
+                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 max-w-2xl w-full mx-4 space-y-5 shadow-2xl">
+                  <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+                    <h4 className="font-bold text-sm text-zinc-100">Assessment Proposal Review</h4>
+                    <button onClick={handleDismissAssessment} className="text-zinc-500 hover:text-zinc-300 text-lg">&times;</button>
+                  </div>
+
+                  <div className="bg-zinc-800/40 rounded-xl p-3 text-xs text-zinc-400 space-y-1">
+                    <div className="flex justify-between"><span>Model</span><span className="font-mono text-zinc-200">{assessProposal.provider_id}/{assessProposal.model_id}</span></div>
+                    <div className="flex justify-between"><span>Benchmark</span><span className="font-mono text-zinc-200">{assessProposal.benchmark_version}</span></div>
+                    <div className="flex justify-between"><span>Overall Confidence</span><span className="font-semibold text-indigo-400">{(assessProposal.overall_confidence * 100).toFixed(0)}%</span></div>
+                  </div>
+
+                  {assessProposal.differences?.length > 0 ? (
+                    <div className="space-y-2">
+                      <h5 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Proposed Changes</h5>
+                      {assessProposal.differences.map((diff: any) => (
+                        <div key={diff.field} className="flex items-center justify-between bg-zinc-800/30 rounded-lg p-3 text-xs">
+                          <div className="flex-1">
+                            <span className="font-semibold text-zinc-200 capitalize">{diff.field.replace(/_/g, ' ')}</span>
+                            <div className="text-[10px] text-zinc-500 mt-0.5">
+                              Current: <span className="text-zinc-400">{diff.current_value || 0}/5</span>
+                              {' → '}
+                              Proposed: <span className="text-indigo-400 font-semibold">{diff.proposed_value}/5</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                              diff.confidence >= 0.7 ? 'bg-emerald-950 text-emerald-400' :
+                              diff.confidence >= 0.4 ? 'bg-amber-950 text-amber-400' :
+                              'bg-zinc-800 text-zinc-400'
+                            }`}>
+                              {(diff.confidence * 100).toFixed(0)}%
+                            </span>
+                            {diff.recommended && <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="text-center py-4 text-zinc-500 text-xs">No changes proposed (current profile matches assessment)</div>
+                  )}
+
+                  {assessProposal.category_results?.length > 0 && (
+                    <div className="space-y-1.5">
+                      <h5 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Category Scores</h5>
+                      <div className="grid grid-cols-2 gap-2">
+                        {assessProposal.category_results.map((cat: any) => (
+                          <div key={cat.name} className="flex justify-between bg-zinc-800/20 rounded-lg p-2 text-xs">
+                            <span className="text-zinc-300 capitalize truncate mr-2">{cat.name.replace(/_/g, ' ')}</span>
+                            <span className="font-bold text-indigo-400">{cat.score}/5</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="flex justify-end gap-2 border-t border-zinc-800 pt-3 flex-wrap">
+                    <button onClick={handleDismissAssessment} className="rounded-lg border border-zinc-800 hover:bg-zinc-800 px-3 py-1.5 text-xs">Discard</button>
+                    <button onClick={() => handleApplyProposal([])} disabled={assessLoading}
+                      className="rounded-lg bg-indigo-600 hover:bg-indigo-500 px-4 py-1.5 text-xs font-semibold disabled:opacity-50 flex items-center gap-1">
+                      {assessLoading && <RefreshCw className="h-3 w-3 animate-spin" />}
+                      Apply Proposal
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* Disclaimer */}
             <div className="bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 text-[10px] text-zinc-400 flex items-start gap-2">
@@ -1751,7 +2038,7 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
   const [smartSessionTTL, setSmartSessionTTL] = useState('60m');
   const [smartMode, setSmartMode] = useState('shadow');
 
-  const [shadowReports, setShadowReports] = useState<any>({});
+  const [shadowReports] = useState<any>({});
 
   const [filterMode, setFilterMode] = useState('all');
 
@@ -1762,13 +2049,11 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
       if (fbTargets.length === 1 && !fbTargets[0].provider) setFbTargets([{ provider: provs[0], model: '' }]);
       if (smartCandidates.length === 1 && !smartCandidates[0].provider) setSmartCandidates([{ provider: provs[0], model: '' }]);
     }
-    apiCall(`${API_BASE}/smart/reports`).then((data: any) => {
-      setShadowReports(data.reports || {});
-    }).catch(() => {});
   }, [config]);
 
   const unifiedRoutes = buildUnifiedRoutes(config, providerHealth);
-  const unassignedRoutes = Object.entries(config.routes || {}).filter(([rName, r]: any) => {
+  const unusedShadowRef = shadowReports; void unusedShadowRef;
+  const unassignedRoutes = Object.entries(config.routes || {}).filter(([rName]: any) => {
     return !Object.values(config.aliases || {}).some((a: any) => a.route === rName);
   });
 
@@ -1818,7 +2103,6 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
 
   const handleToggleRoute = async (route: any, enabled: boolean) => {
     if (route.mode === 'smart') {
-      const mode = enabled ? 'shadow' : 'off';
       try {
         await apiCall(`${API_BASE}/smart/routes/${route.internalId}/${enabled ? 'enable-shadow' : 'disable'}`, 'POST', {});
         toastSuccess(`Route "${route.name}" ${enabled ? 'enabled' : 'disabled'}`);

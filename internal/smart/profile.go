@@ -6,9 +6,12 @@ import (
 )
 
 // ProfileStore resolves model profiles from user overrides and the built-in catalog.
+// It is assessment-aware: a resolved profile can wrap an assessment baseline + user overrides.
 type ProfileStore struct {
 	// User overrides keyed by provider/model (or explicit profile id).
 	User map[string]ModelProfile
+	// Assessment baselines keyed by provider/model.
+	Assessments map[string]ModelProfile
 	// Strict rejects unprofiled candidates from smart routes.
 	Strict bool
 }
@@ -18,11 +21,22 @@ func NewProfileStore(user map[string]ModelProfile, strict bool) *ProfileStore {
 	if user == nil {
 		user = map[string]ModelProfile{}
 	}
-	return &ProfileStore{User: user, Strict: strict}
+	return &ProfileStore{User: user, Assessments: map[string]ModelProfile{}, Strict: strict}
+}
+
+// NewProfileStoreWithAssessments builds a store with user profiles and assessment baselines.
+func NewProfileStoreWithAssessments(user, assessments map[string]ModelProfile, strict bool) *ProfileStore {
+	if user == nil {
+		user = map[string]ModelProfile{}
+	}
+	if assessments == nil {
+		assessments = map[string]ModelProfile{}
+	}
+	return &ProfileStore{User: user, Assessments: assessments, Strict: strict}
 }
 
 // Resolve returns the effective profile for a candidate.
-// Precedence: user override (by profileID or provider/model) > builtin > empty unprofiled.
+// Precedence: user override > assessment baseline > builtin > empty unprofiled.
 func (s *ProfileStore) Resolve(providerID, modelID, profileID string) (ModelProfile, bool) {
 	keys := []string{}
 	if profileID != "" {
@@ -42,6 +56,23 @@ func (s *ProfileStore) Resolve(providerID, modelID, profileID string) (ModelProf
 			}
 			if p.Source == "" {
 				p.Source = SourceUser
+			}
+			return mergeWithDefaults(p), true
+		}
+	}
+
+	// Assessment baseline (next precedence after user override).
+	for _, k := range keys {
+		if p, ok := s.Assessments[k]; ok {
+			p.ID = k
+			if p.ProviderID == "" {
+				p.ProviderID = providerID
+			}
+			if p.ModelID == "" {
+				p.ModelID = modelID
+			}
+			if p.Source == "" {
+				p.Source = SourceSelfAssess
 			}
 			return mergeWithDefaults(p), true
 		}

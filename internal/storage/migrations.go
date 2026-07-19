@@ -113,6 +113,49 @@ CREATE TABLE IF NOT EXISTS config_history (
     config_yaml TEXT NOT NULL,
     sanitized_yaml TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS model_assessments (
+    assessment_id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    connection_fingerprint TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    depth TEXT NOT NULL,
+    benchmark_version TEXT NOT NULL,
+    scoring_version TEXT NOT NULL,
+    categories_json TEXT,
+    started_at TEXT,
+    completed_at TEXT,
+    estimated_tokens INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost REAL NOT NULL DEFAULT 0,
+    actual_cost REAL NOT NULL DEFAULT 0,
+    confidence REAL NOT NULL DEFAULT 0,
+    proposed_profile_json TEXT,
+    applied_at TEXT,
+    applied_fields TEXT,
+    error_text TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_assessments_model ON model_assessments(provider_id, model_id);
+CREATE INDEX IF NOT EXISTS idx_model_assessments_status ON model_assessments(status);
+
+CREATE TABLE IF NOT EXISTS model_assessment_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    assessment_id TEXT NOT NULL REFERENCES model_assessments(assessment_id),
+    category TEXT NOT NULL,
+    test_name TEXT NOT NULL,
+    passed INTEGER NOT NULL DEFAULT 0,
+    score REAL,
+    evidence TEXT,
+    latency_ms INTEGER,
+    input_tokens INTEGER,
+    output_tokens INTEGER,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_assessment_results_cat ON model_assessment_results(assessment_id, category);
 `
 
-const currentSchemaVersion = 3
+const currentSchemaVersion = 4
