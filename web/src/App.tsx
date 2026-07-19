@@ -1585,6 +1585,11 @@ function ProfilesTab({ config, discoveredModels, apiCall, fetchConfig, toastSucc
       const res = await apiCall(`${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/assessments`, 'POST', {
         depth: assessDepth, categories: assessCategories.length > 0 ? assessCategories : undefined
       });
+      if (!res || !res.assessment_id) {
+        console.error('Assessment POST response missing assessment_id, body:', res, 'URL:', `${API_BASE}/model-profiles/${encodeURIComponent(selectedModel)}/assessments`);
+        setAssessView('none');
+        return;
+      }
       setAssessId(res.assessment_id);
       setAssessView('running');
       setAssessStatus(res);
