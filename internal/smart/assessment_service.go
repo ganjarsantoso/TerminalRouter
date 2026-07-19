@@ -432,6 +432,8 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 			cats[i].Score = 0
 			cats[i].Confidence = 0.3
 			cats[i].Evidence = "no test prompt defined for this category"
+			rec.Categories = cats
+			_ = s.store.UpdateAssessment(context.Background(), rec)
 			continue
 		}
 
@@ -465,6 +467,11 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 			score = 0
 			conf = 0.2
 			evidence = fmt.Sprintf("execution error: %s", execErr.Error())
+			cats[i].Status = StatusFailed
+			rec.Error = fmt.Sprintf("%s failed: %s", cats[i].Name, execErr.Error())
+			if rec.Status == StatusRunning {
+				rec.Status = StatusPartial
+			}
 		} else {
 			var respText string
 			if result.Response != nil {
@@ -485,9 +492,9 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 					conf = 0.95
 				}
 			}
+			cats[i].Status = StatusCompleted
 		}
 
-		cats[i].Status = StatusCompleted
 		cats[i].Score = score
 		cats[i].Confidence = conf
 		cats[i].TestsPassed = passed
@@ -522,7 +529,7 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 		if cat.Score > 0 {
 			proposed.Capabilities[cat.Name] = cat.Score
 		}
-		if cat.Score == 0 && strings.HasPrefix(cat.Evidence, "execution error:") {
+		if cat.Status == StatusFailed {
 			failedCats++
 			errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", cat.Name, cat.Evidence))
 		}
