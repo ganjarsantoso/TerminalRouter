@@ -515,20 +515,37 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 	if toolsKnown {
 		proposed.Properties.Tools = boolPtr(true)
 	}
+	totalCats := len(cats)
+	failedCats := 0
+	var errMsgs []string
 	for _, cat := range cats {
 		if cat.Score > 0 {
 			proposed.Capabilities[cat.Name] = cat.Score
 		}
+		if cat.Score == 0 && strings.HasPrefix(cat.Evidence, "execution error:") {
+			failedCats++
+			errMsgs = append(errMsgs, fmt.Sprintf("%s: %s", cat.Name, cat.Evidence))
+		}
 	}
 
 	now := time.Now().UTC()
-	rec.Status = StatusCompleted
 	rec.CompletedAt = &now
 	rec.Categories = cats
 	rec.Confidence = ComputeConfidence(cats, rec.Depth)
 	rec.ProposedProfile = &proposed
 	rec.InputTokens = totalIn
 	rec.OutputTokens = totalOut
+
+	switch {
+	case failedCats == totalCats:
+		rec.Status = StatusFailed
+		rec.Error = fmt.Sprintf("all %d categories failed: %s", totalCats, strings.Join(errMsgs, "; "))
+	case failedCats > 0:
+		rec.Status = StatusPartial
+		rec.Error = fmt.Sprintf("%d/%d categories failed: %s", failedCats, totalCats, strings.Join(errMsgs, "; "))
+	default:
+		rec.Status = StatusCompleted
+	}
 	_ = s.store.UpdateAssessment(context.Background(), rec)
 }
 
