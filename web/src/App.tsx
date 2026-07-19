@@ -21,7 +21,8 @@ import {
   Clock,
   Layers,
   Info,
-  Pencil
+  Pencil,
+  XCircle
 } from 'lucide-react';
 
 // API helpers
@@ -2041,6 +2042,7 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
   const [smartSessionTTL, setSmartSessionTTL] = useState('60m');
   const [smartMode, setSmartMode] = useState('shadow');
   const [editingRoute, setEditingRoute] = useState<any | null>(null);
+  const [candidateTests, setCandidateTests] = useState<Record<string, { loading: boolean; ok?: boolean; error?: string }>>({});
 
   const [shadowReports] = useState<any>({});
 
@@ -2082,6 +2084,7 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
     setSmartSessionTTL('60m');
     setSmartMode('shadow');
     setEditingRoute(null);
+    setCandidateTests({});
   };
 
   const handleDeleteRoute = async (route: any) => {
@@ -2116,6 +2119,19 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
     } else {
       // For non-smart routes, toggle via the alias enable state if possible
       toastSuccess(`Route state updated`);
+    }
+  };
+
+  const handleTestCandidate = async (key: string, provider: string, model: string) => {
+    if (!provider || !model) return;
+    setCandidateTests(prev => ({ ...prev, [key]: { loading: true } }));
+    try {
+      const res = await apiCall(`${API_BASE}/providers/${encodeURIComponent(provider)}/test`, 'POST');
+      const models: string[] = res.models || [];
+      const found = models.some((m: string) => m === model || m.endsWith('/' + model));
+      setCandidateTests(prev => ({ ...prev, [key]: { loading: false, ok: found, error: found ? undefined : `Model "${model}" not found in provider listing` } }));
+    } catch (e: any) {
+      setCandidateTests(prev => ({ ...prev, [key]: { loading: false, ok: false, error: e.message } }));
     }
   };
 
@@ -2337,7 +2353,23 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
               </div>
               <div>
                 <label className="block text-xs font-semibold text-zinc-400 mb-1">Model</label>
-                <input type="text" required value={singleModel} onChange={(e) => setSingleModel(e.target.value)} placeholder="gpt-4o-mini" list="route-single-models" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono" />
+                <div className="flex gap-2">
+                  <input type="text" required value={singleModel} onChange={(e) => setSingleModel(e.target.value)} placeholder="gpt-4o-mini" list="route-single-models" className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono" />
+                  <button type="button" onClick={() => handleTestCandidate('single', singleProvider, singleModel)}
+                    disabled={!singleProvider || !singleModel || candidateTests['single']?.loading}
+                    className={`p-2 rounded-lg transition-colors border ${
+                      candidateTests['single']?.loading ? 'bg-zinc-800 text-zinc-500 border-zinc-700 animate-pulse' :
+                      candidateTests['single']?.ok === true ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                      candidateTests['single']?.ok === false ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+                      'bg-zinc-800/50 text-zinc-500 border-zinc-800 hover:bg-zinc-800'
+                    }`}
+                    title={candidateTests['single']?.error || (candidateTests['single']?.ok ? 'Model reachable' : 'Test model')}>
+                    {candidateTests['single']?.loading ? <RefreshCw className="h-4 w-4 animate-spin" /> :
+                     candidateTests['single']?.ok === true ? <CheckCircle className="h-4 w-4" /> :
+                     candidateTests['single']?.ok === false ? <XCircle className="h-4 w-4" /> :
+                     <Play className="h-4 w-4" />}
+                  </button>
+                </div>
                 <datalist id="route-single-models">
                   {availableModels(discoveredModels, singleProvider, config).map((m: string) => (
                     <option key={m} value={m} />
@@ -2374,6 +2406,20 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
                       <option key={m} value={m} />
                     ))}
                   </datalist>
+                  <button type="button" onClick={() => handleTestCandidate(`fb-${idx}`, t.provider, t.model)}
+                    disabled={!t.provider || !t.model || candidateTests[`fb-${idx}`]?.loading}
+                    className={`p-1.5 rounded-lg transition-colors border text-xs flex items-center gap-1 ${
+                      candidateTests[`fb-${idx}`]?.loading ? 'bg-zinc-800 text-zinc-500 border-zinc-700 animate-pulse' :
+                      candidateTests[`fb-${idx}`]?.ok === true ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                      candidateTests[`fb-${idx}`]?.ok === false ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+                      'bg-zinc-800/50 text-zinc-500 border-zinc-800 hover:bg-zinc-800'
+                    }`}
+                    title={candidateTests[`fb-${idx}`]?.error || (candidateTests[`fb-${idx}`]?.ok ? 'Model reachable' : 'Test candidate')}>
+                    {candidateTests[`fb-${idx}`]?.loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> :
+                     candidateTests[`fb-${idx}`]?.ok === true ? <CheckCircle className="h-3.5 w-3.5" /> :
+                     candidateTests[`fb-${idx}`]?.ok === false ? <XCircle className="h-3.5 w-3.5" /> :
+                     <Play className="h-3.5 w-3.5" />}
+                  </button>
                   {fbTargets.length > 1 && (
                     <button type="button" onClick={() => setFbTargets(fbTargets.filter((_, i) => i !== idx))} className="text-rose-400 hover:text-rose-200 p-2">
                       <Trash2 className="h-4 w-4" />
@@ -2408,6 +2454,20 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
                         <option key={m} value={m} />
                       ))}
                     </datalist>
+                    <button type="button" onClick={() => handleTestCandidate(`sc-${idx}`, c.provider, c.model)}
+                      disabled={!c.provider || !c.model || candidateTests[`sc-${idx}`]?.loading}
+                      className={`p-1.5 rounded-lg transition-colors border text-xs flex items-center gap-1 ${
+                        candidateTests[`sc-${idx}`]?.loading ? 'bg-zinc-800 text-zinc-500 border-zinc-700 animate-pulse' :
+                        candidateTests[`sc-${idx}`]?.ok === true ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                        candidateTests[`sc-${idx}`]?.ok === false ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+                        'bg-zinc-800/50 text-zinc-500 border-zinc-800 hover:bg-zinc-800'
+                      }`}
+                      title={candidateTests[`sc-${idx}`]?.error || (candidateTests[`sc-${idx}`]?.ok ? 'Model reachable' : 'Test candidate')}>
+                      {candidateTests[idx]?.loading ? <RefreshCw className="h-3.5 w-3.5 animate-spin" /> :
+                       candidateTests[idx]?.ok === true ? <CheckCircle className="h-3.5 w-3.5" /> :
+                       candidateTests[idx]?.ok === false ? <XCircle className="h-3.5 w-3.5" /> :
+                       <Play className="h-3.5 w-3.5" />}
+                    </button>
                     {smartCandidates.length > 1 && (
                       <button type="button" onClick={() => setSmartCandidates(smartCandidates.filter((_, i) => i !== idx))} className="text-rose-400 hover:text-rose-200 p-2">
                         <Trash2 className="h-4 w-4" />
