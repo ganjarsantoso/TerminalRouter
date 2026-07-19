@@ -57,37 +57,40 @@ func (a *Adapter) applyAuth(req *http.Request, conn config.ProviderConfig, crede
 }
 
 func (a *Adapter) Validate(ctx context.Context, conn config.ProviderConfig, credential string) error {
-	// Anthropic has no public list-models without billing; do a minimal invalid request to check auth.
-	payload := map[string]any{
-		"model":      "claude-3-haiku-20240307",
-		"max_tokens": 1,
-		"messages":   []map[string]any{{"role": "user", "content": "ping"}},
-	}
-	raw, status, err := a.doJSON(ctx, conn, credential, "/v1/messages", payload)
+	// Check auth by listing models (GET /v1/models) — no hardcoded model required.
+	url := a.baseURL(conn) + "/v1/models"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err
 	}
-	if status == 401 || status == 403 {
-		return fmt.Errorf("authentication failed (HTTP %d)", status)
+	a.applyAuth(req, conn, credential)
+	resp, err := a.HTTPClient.Do(req)
+	if err != nil {
+		return err
 	}
-	if status == 404 {
-		// model not found but auth ok
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	switch resp.StatusCode {
+	case 401, 403:
+		return fmt.Errorf("authentication failed (HTTP %d)", resp.StatusCode)
+	case 404:
+		// endpoint gated but key accepted
+		return nil
+	case 200, 400:
+		return nil
+	case 0:
+		return fmt.Errorf("provider unreachable")
+	default:
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("provider unavailable (HTTP %d)", resp.StatusCode)
+		}
 		return nil
 	}
-	if status >= 500 {
-		return fmt.Errorf("provider unavailable (HTTP %d): %s", status, truncate(string(raw), 200))
-	}
-	// 200 or 400 both mean we reached the API with valid auth often
-	return nil
 }
 
 func (a *Adapter) ListModels(ctx context.Context, conn config.ProviderConfig, credential string) ([]provider.Model, error) {
-	// Static common models; Anthropic model list API is limited.
-	return []provider.Model{
-		{ID: "claude-sonnet-4-20250514", DisplayName: "Claude Sonnet 4"},
-		{ID: "claude-3-5-haiku-20241022", DisplayName: "Claude 3.5 Haiku"},
-		{ID: "claude-3-haiku-20240307", DisplayName: "Claude 3 Haiku"},
-	}, nil
+	// No hardcoded model list: the console lets users enter model ids directly.
+	return nil, nil
 }
 
 func (a *Adapter) Execute(ctx context.Context, nreq *normalization.NormalizedRequest, target provider.Target, credential string) (*normalization.NormalizedResponse, error) {

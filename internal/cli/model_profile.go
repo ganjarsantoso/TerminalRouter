@@ -298,7 +298,7 @@ func containsString(slice []string, s string) bool {
 func modelProfileList() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List built-in and user model profiles",
+		Short: "List configured model profiles",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, _, store, _, err := app.LoadRuntime(mustHome())
 			if err != nil {
@@ -310,9 +310,6 @@ func modelProfileList() *cobra.Command {
 				Source string `json:"source"`
 			}
 			var rows []row
-			for _, k := range smart.ListBuiltinKeys() {
-				rows = append(rows, row{ID: k, Source: smart.SourceBuiltin})
-			}
 			for k, mp := range cfg.ModelProfiles {
 				src := mp.Source
 				if src == "" {

@@ -2,16 +2,6 @@ package smart
 
 import "testing"
 
-func TestBuiltinLookup(t *testing.T) {
-	p, ok := LookupBuiltin("deepseek/deepseek-chat")
-	if !ok {
-		t.Fatal("missing builtin")
-	}
-	if p.Cap(CapCoding) < 4 {
-		t.Fatalf("coding=%g", p.Cap(CapCoding))
-	}
-}
-
 func TestUserOverridePrecedence(t *testing.T) {
 	user := map[string]ModelProfile{
 		"deepseek/deepseek-chat": {

@@ -32,38 +32,18 @@ type ProviderSummarizer struct {
 	cfg      *config.Config
 }
 
-// NewProviderSummarizer builds a summarizer. target may be zero; in that case
-// the first credentialed provider/model from cfg is used.
+// NewProviderSummarizer builds a summarizer. The target model must be configured
+// explicitly via cfg.Summarizer (provider + model); there is no built-in default.
+// If unset, SummarizeEvidence returns a clear configuration error.
 func NewProviderSummarizer(cfg *config.Config, creds *credentials.Manager, target summarizerTarget) *ProviderSummarizer {
 	reg := provider.NewRegistry()
 	reg.Register(compatible.NewOpenAI())
 	reg.Register(compatible.NewCompatible())
 	reg.Register(anthropic.New())
 	if target.ProviderID == "" || target.Model == "" {
-		target = pickSummarizerTarget(cfg, creds)
+		target = summarizerTarget{ProviderID: cfg.Summarizer.Provider, Model: cfg.Summarizer.Model}
 	}
 	return &ProviderSummarizer{registry: reg, creds: creds, target: target, cfg: cfg}
-}
-
-// pickSummarizerTarget chooses a usable provider/model that has credentials.
-func pickSummarizerTarget(cfg *config.Config, creds *credentials.Manager) summarizerTarget {
-	for id, p := range cfg.Providers {
-		if p.CredentialRef == "" || p.CredentialRef == "none://" {
-			continue
-		}
-		if _, err := creds.Resolve(p.CredentialRef); err != nil {
-			continue
-		}
-		switch p.Type {
-		case "openai":
-			return summarizerTarget{ProviderID: id, Model: "gpt-4o"}
-		case "anthropic":
-			return summarizerTarget{ProviderID: id, Model: "claude-3-5-sonnet-latest"}
-		case "google":
-			return summarizerTarget{ProviderID: id, Model: "gemini-1.5-pro"}
-		}
-	}
-	return summarizerTarget{}
 }
 
 var summarizerPrompt = `You are a benchmark analyst. Below are excerpts from web pages about the AI model "%s".
@@ -89,8 +69,8 @@ var jsonBlockRe = regexp.MustCompile(`(?s)\{.*\}`)
 
 // SummarizeEvidence implements external.Summarizer.
 func (p *ProviderSummarizer) SummarizeEvidence(ctx context.Context, modelName string, pages []external.PageText) (external.Summary, error) {
-	if p.target.ProviderID == "" {
-		return external.Summary{}, fmt.Errorf("no credentialed model available to summarize evidence")
+	if p.target.ProviderID == "" || p.target.Model == "" {
+		return external.Summary{}, fmt.Errorf("no summarizer model configured: set summarizer.provider and summarizer.model in config to enable independent-benchmark import")
 	}
 	pc, ok := p.cfg.Providers[p.target.ProviderID]
 	if !ok {

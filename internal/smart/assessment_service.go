@@ -952,13 +952,7 @@ func (s *ModelAssessmentService) GenerateProposal(assessmentID string, affectedR
 
 		currentVal := current.Capabilities[cat.Name]
 		if currentVal != cat.Score {
-			src := SourceBuiltin
-			switch current.Source {
-			case SourceUser:
-				src = SourceUser
-			case SourceSelfAssess:
-				src = SourceSelfAssess
-			}
+			src := current.Source
 			diffs = append(diffs, ProfileFieldDiff{
 				Field:         cat.Name,
 				CurrentValue:  currentVal,

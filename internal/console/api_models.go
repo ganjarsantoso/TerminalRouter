@@ -90,10 +90,6 @@ func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 	ps := smart.NewProfileStoreFromConfig(rc.Cfg, true)
 	rows := []map[string]any{}
-	for _, k := range smart.ListBuiltinKeys() {
-		p, _ := ps.Resolve("", "", k)
-		rows = append(rows, profileRow(k, p, smart.SourceBuiltin))
-	}
 	for k, mp := range rc.Cfg.ModelProfiles {
 		src := mp.Source
 		if src == "" {

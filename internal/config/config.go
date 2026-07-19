@@ -21,6 +21,15 @@ type Config struct {
 	Aliases       map[string]AliasConfig      `yaml:"aliases" json:"aliases"`
 	ModelProfiles map[string]ModelProfileConfig `yaml:"model_profiles,omitempty" json:"model_profiles,omitempty"`
 	Logging       LoggingConfig               `yaml:"logging" json:"logging"`
+	Summarizer    SummarizerConfig            `yaml:"summarizer,omitempty" json:"summarizer,omitempty"`
+}
+
+// SummarizerConfig selects the model used to summarize fetched benchmark pages
+// into structured capability scores. There is no built-in default; it must be
+// configured explicitly so the app never relies on a hardcoded model id.
+type SummarizerConfig struct {
+	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
+	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
 }
 
 type ServerConfig struct {

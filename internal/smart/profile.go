@@ -2,7 +2,6 @@ package smart
 
 import (
 	"fmt"
-	"strings"
 )
 
 // ProfileStore resolves model profiles from user overrides and the built-in catalog.
@@ -108,44 +107,12 @@ func (s *ProfileStore) Resolve(providerID, modelID, profileID string) (ModelProf
 		}
 	}
 
-	// Builtin catalog
-	for _, k := range keys {
-		if p, ok := LookupBuiltin(k); ok {
-			p.ProviderID = providerID
-			p.ModelID = modelID
-			return p, true
-		}
-	}
-	// Try provider-type family: e.g. anthropic-main/claude-sonnet → anthropic/claude-sonnet
-	family := familyKey(providerID, modelID)
-	if p, ok := LookupBuiltin(family); ok {
-		p.ProviderID = providerID
-		p.ModelID = modelID
-		p.ID = ProfileKey(providerID, modelID)
-		return p, true
-	}
-
+	// No built-in catalog: a model is only profiled if the user has configured a
+	// profile or it has been assessed / imported from independent benchmarks.
 	return ModelProfile{
 		ID: ProfileKey(providerID, modelID), ProviderID: providerID, ModelID: modelID,
 		Source: SourceUnknown, Capabilities: map[string]float64{},
 	}, false
-}
-
-func familyKey(providerID, modelID string) string {
-	p := strings.ToLower(providerID)
-	m := strings.ToLower(modelID)
-	switch {
-	case strings.Contains(p, "anthropic") || strings.Contains(m, "claude"):
-		return "anthropic/" + modelID
-	case strings.Contains(p, "openai") || strings.HasPrefix(m, "gpt-") || strings.HasPrefix(m, "o1"):
-		return "openai/" + modelID
-	case strings.Contains(p, "deepseek") || strings.Contains(m, "deepseek"):
-		return "deepseek/" + modelID
-	case strings.Contains(p, "local") || p == "ollama" || p == "lmstudio":
-		return "local/" + modelID
-	default:
-		return providerID + "/" + modelID
-	}
 }
 
 func mergeWithDefaults(p ModelProfile) ModelProfile {
@@ -241,19 +208,7 @@ func (s *ProfileStore) ListUserKeys() []string {
 	return keys
 }
 
-// ListBuiltinKeys returns sorted builtin catalog keys.
+// ListBuiltinKeys returns no keys: there is no built-in model catalog.
 func ListBuiltinKeys() []string {
-	cat := BuiltinCatalog()
-	keys := make([]string, 0, len(cat))
-	for k := range cat {
-		keys = append(keys, k)
-	}
-	for i := 1; i < len(keys); i++ {
-		j := i
-		for j > 0 && keys[j] < keys[j-1] {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-			j--
-		}
-	}
-	return keys
+	return nil
 }

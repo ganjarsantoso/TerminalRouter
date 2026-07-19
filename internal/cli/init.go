@@ -96,7 +96,7 @@ func newInitCmd() *cobra.Command {
 			fmt.Println()
 			fmt.Println("Next:")
 			fmt.Println("  termrouter provider add --name openai-main --type openai")
-			fmt.Println("  termrouter alias add coding --provider openai-main --model gpt-4o-mini")
+			fmt.Println("  termrouter alias add coding --provider openai-main --model <provider>/<model>")
 			fmt.Println("  termrouter serve")
 			return nil
 		},

@@ -791,7 +791,7 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
   const handleFinishSetup = async () => {
     try {
       // Save route
-      const finalModel = selectedModel || customModel || 'gpt-4o';
+      const finalModel = selectedModel || customModel || '';
       const routePayload = {
         name: 'default',
         strategy: 'direct',
@@ -980,11 +980,11 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
             ) : (
               <div>
                 <label className="block text-xs font-semibold text-zinc-400 mb-1">Enter Model ID</label>
-                <input type="text" value={customModel} onChange={(e) => setCustomModel(e.target.value)} placeholder="gpt-4o" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
+                <input type="text" value={customModel} onChange={(e) => setCustomModel(e.target.value)} placeholder="e.g. provider/model" className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100" />
               </div>
             )}
             <p className="text-xs text-zinc-500 leading-relaxed">
-              When client apps call TermRouter requesting the model <code className="font-mono text-zinc-400">general</code> (Single Model route), it will always execute against provider <code className="font-mono text-zinc-400">{providerName}</code> with target model <code className="font-mono text-zinc-400">{selectedModel || customModel || 'gpt-4o'}</code>.
+              When client apps call TermRouter requesting the model <code className="font-mono text-zinc-400">general</code> (Single Model route), it will always execute against provider <code className="font-mono text-zinc-400">{providerName}</code> with target model <code className="font-mono text-zinc-400">{selectedModel || customModel || '(none selected)'}</code>.
             </p>
           </div>
         )}
@@ -1043,7 +1043,7 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
     "model": "general",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'  
-# "general" is the public route name → resolves to ${providerName}/${selectedModel || customModel || 'gpt-4o'}`}
+# "general" is the public route name → resolves to ${providerName}/${selectedModel || customModel || 'MODEL'}`}
               </pre>
             </div>
 
@@ -1705,7 +1705,7 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
       } else if (msg.includes('search failed') || msg.includes('search_failed')) {
         toastError(`Web search failed while gathering evidence: ${msg}`);
       } else if (msg.includes('not in the identity directory') || msg.includes('unknown_model')) {
-        toastError(`"${selectedModel}" is not a recognized model. Try a known model id (e.g. openai/gpt-4o).`);
+        toastError(`"${selectedModel}" is not a recognized model.`);
       } else {
         toastError('Could not load independent benchmark evidence: ' + msg);
       }
@@ -2159,20 +2159,20 @@ function ProfilesTab({ config, apiCall, fetchConfig, toastSuccess, toastError }:
                 <div>
                   <label className="block text-zinc-400 mb-1">Cost Tier (1-5)</label>
                   <select value={costTier} onChange={(e) => setCostTier(Number(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5">
-                    <option value="1">1 - Free/Micro (Ollama, local)</option>
-                    <option value="2">2 - Low Cost (gpt-4o-mini, haiku)</option>
-                    <option value="3">3 - Medium Cost (gpt-4o, flash)</option>
-                    <option value="4">4 - High Cost (pro, sonnet)</option>
-                    <option value="5">5 - Premium/Enterprise (opus)</option>
+                    <option value="1">1 - Free / Micro (local)</option>
+                    <option value="2">2 - Low Cost</option>
+                    <option value="3">3 - Medium Cost</option>
+                    <option value="4">4 - High Cost</option>
+                    <option value="5">5 - Premium / Enterprise</option>
                   </select>
                 </div>
                 <div>
                   <label className="block text-zinc-400 mb-1">Latency Tier (1-5)</label>
                   <select value={latencyTier} onChange={(e) => setLatencyTier(Number(e.target.value))} className="w-full bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-1.5">
                     <option value="1">1 - Realtime (local, tiny)</option>
-                    <option value="2">2 - Fast (gpt-4o-mini, haiku)</option>
-                    <option value="3">3 - Normal (gpt-4o, sonnet)</option>
-                    <option value="4">4 - High (heavy reasoning models)</option>
+                    <option value="2">2 - Fast</option>
+                    <option value="3">3 - Normal</option>
+                    <option value="4">4 - High (heavy reasoning)</option>
                     <option value="5">5 - Slow (deep search / reasoning)</option>
                   </select>
                 </div>
@@ -2539,7 +2539,7 @@ function RoutesTab({ config, discoveredModels, providerHealth, apiCall, fetchCon
               <div>
                 <label className="block text-xs font-semibold text-zinc-400 mb-1">Model</label>
                 <div className="flex gap-2">
-                  <input type="text" required value={singleModel} onChange={(e) => setSingleModel(e.target.value)} placeholder="gpt-4o-mini" list="route-single-models" className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono" />
+                  <input type="text" required value={singleModel} onChange={(e) => setSingleModel(e.target.value)} placeholder="provider/model" list="route-single-models" className="flex-1 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono" />
                   <button type="button" onClick={() => handleTestCandidate('single', singleProvider, singleModel)}
                     disabled={!singleProvider || !singleModel || candidateTests['single']?.loading}
                     className={`p-2 rounded-lg transition-colors border ${

@@ -43,7 +43,6 @@ const (
 
 // Source identifies where a profile field came from.
 const (
-	SourceBuiltin     = "builtin"
 	SourceUser        = "user"
 	SourceObserved    = "observed"
 	SourceSelfAssess  = "self-assessment"
