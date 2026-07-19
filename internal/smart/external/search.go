@@ -70,22 +70,54 @@ var ddgSnipRe = regexp.MustCompile(`<a[^>]+class="result__snippet"[^>]*>(.*?)</a
 // Search queries the web backend, then enriches the top results by fetching
 // their pages and extracting benchmark-relevant lines. This yields far more
 // accurate figures than search snippets alone.
+//
+// The default DuckDuckGo HTML endpoint is queried with GET (some TLS-intercepting
+// proxies reject POST to that path with 405). If GET fails, a POST is attempted
+// as a fallback. A custom endpoint may be supplied via config.
 func (w *WebSearcher) Search(ctx context.Context, query string) ([]SearchResult, error) {
 	endpoint := w.Endpoint
 	if endpoint == "" {
 		endpoint = "https://html.duckduckgo.com/html/"
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader("q="+url.QueryEscape(query)))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "TermRouter/1.0 (+https://github.com/termrouter/termrouter)")
-
 	client := w.Client
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
 	}
+
+	results, err := w.searchOnce(ctx, client, endpoint, query, http.MethodGet)
+	if err != nil {
+		// Retry with POST (DuckDuckGo's native method) in case GET was blocked.
+		if r2, err2 := w.searchOnce(ctx, client, endpoint, query, http.MethodPost); err2 == nil {
+			results = r2
+			err = nil
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (w *WebSearcher) searchOnce(ctx context.Context, client *http.Client, endpoint, query, method string) ([]SearchResult, error) {
+	var bodyReader io.Reader
+	if method == http.MethodPost {
+		bodyReader = strings.NewReader("q=" + url.QueryEscape(query))
+	} else {
+		sep := "?"
+		if strings.Contains(endpoint, "?") {
+			sep = "&"
+		}
+		endpoint = endpoint + sep + "q=" + url.QueryEscape(query)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, bodyReader)
+	if err != nil {
+		return nil, err
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) TermRouter/1.0")
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -97,7 +129,7 @@ func (w *WebSearcher) Search(ctx context.Context, query string) ([]SearchResult,
 		if len(msg) > 500 {
 			msg = msg[:500]
 		}
-		log.Printf("[external] web search %s returned %d: %s", endpoint, resp.StatusCode, msg)
+		log.Printf("[external] web search %s %s returned %d: %s", method, endpoint, resp.StatusCode, msg)
 		return nil, fmt.Errorf("search endpoint %s returned %d: %s", endpoint, resp.StatusCode, msg)
 	}
 
