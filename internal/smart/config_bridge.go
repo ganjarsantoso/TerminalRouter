@@ -9,71 +9,85 @@ import (
 
 // ProfilesFromConfig converts config model_profiles to smart profiles.
 func ProfilesFromConfig(cfg *config.Config) map[string]ModelProfile {
-	user, _ := SplitProfilesFromConfig(cfg)
+	user, _, _ := SplitProfilesFromConfig(cfg)
 	return user
 }
 
-// SplitProfilesFromConfig separates config model_profiles into user overrides and
-// external-consensus baselines based on their declared source.
-func SplitProfilesFromConfig(cfg *config.Config) (user, external map[string]ModelProfile) {
+// SplitProfilesFromConfig separates layered config model_profiles into user
+// overrides, local assessment baselines, and external-consensus baselines. Each
+// returned map is keyed by profile id and contains only the fields present in
+// that layer, allowing per-field precedence at resolution time.
+func SplitProfilesFromConfig(cfg *config.Config) (user, assessment, external map[string]ModelProfile) {
 	user = map[string]ModelProfile{}
+	assessment = map[string]ModelProfile{}
 	external = map[string]ModelProfile{}
 	if cfg == nil {
-		return user, external
+		return user, assessment, external
 	}
 	for id, mp := range cfg.ModelProfiles {
-		p := ModelProfile{
-			ID:     id,
-			Source: mp.Source,
-			Version: mp.Version,
-			Capabilities: map[string]float64{},
-			Properties: ModelProperties{
-				Vision: mp.Properties.Vision,
-				Tools: mp.Properties.Tools,
-				ParallelTools: mp.Properties.ParallelTools,
-				StructuredOutput: mp.Properties.StructuredOutput,
-				Streaming: mp.Properties.Streaming,
-				ContextWindow: mp.Properties.ContextWindow,
-				MaxOutputTokens: mp.Properties.MaxOutputTokens,
-				CostTier: mp.Properties.CostTier,
-				LatencyTier: mp.Properties.LatencyTier,
-				Privacy: mp.Properties.Privacy,
-			},
+		if bl := mp.UserOverrides; bl != nil {
+			user[id] = baselineToProfile(id, bl, SourceUser)
 		}
-		if p.Source == "" {
-			p.Source = SourceUser
+		if bl := mp.AssessmentBaseline; bl != nil {
+			assessment[id] = baselineToProfile(id, bl, SourceSelfAssess)
 		}
-		for k, v := range mp.Capabilities {
-			p.Capabilities[k] = v
-		}
-		// split provider/model from id when possible
-		if i := strings.IndexByte(id, '/'); i > 0 {
-			p.ProviderID = id[:i]
-			p.ModelID = id[i+1:]
-		}
-		if p.Source == SourceExternal {
-			external[id] = p
-		} else {
-			user[id] = p
+		if bl := mp.ExternalBaseline; bl != nil {
+			external[id] = baselineToProfile(id, bl, SourceExternal)
 		}
 	}
-	return user, external
+	return user, assessment, external
 }
 
-// NewProfileStoreFromConfig builds a ProfileStore separating user overrides and
-// external-consensus baselines by their declared source.
+func baselineToProfile(id string, bl *config.ProfileBaseline, source string) ModelProfile {
+	p := ModelProfile{
+		ID:          id,
+		Source:      source,
+		Version:     bl.Version,
+		Capabilities: map[string]float64{},
+		Confidence:  map[string]float64{},
+	}
+	for k, v := range bl.Capabilities {
+		p.Capabilities[k] = v
+	}
+	for k, v := range bl.Confidence {
+		p.Confidence[k] = v
+	}
+	if bl.Properties != nil {
+		p.Properties = ModelProperties{
+			Vision: bl.Properties.Vision,
+			Tools: bl.Properties.Tools,
+			ParallelTools: bl.Properties.ParallelTools,
+			StructuredOutput: bl.Properties.StructuredOutput,
+			Streaming: bl.Properties.Streaming,
+			ContextWindow: bl.Properties.ContextWindow,
+			MaxOutputTokens: bl.Properties.MaxOutputTokens,
+			CostTier: bl.Properties.CostTier,
+			LatencyTier: bl.Properties.LatencyTier,
+			Privacy: bl.Properties.Privacy,
+		}
+	}
+	if i := strings.IndexByte(id, '/'); i > 0 {
+		p.ProviderID = id[:i]
+		p.ModelID = id[i+1:]
+	}
+	return p
+}
+
+// NewProfileStoreFromConfig builds a ProfileStore from layered config profiles.
 func NewProfileStoreFromConfig(cfg *config.Config, strict bool) *ProfileStore {
-	user, external := SplitProfilesFromConfig(cfg)
-	return NewProfileStoreWithAssessments(user, nil, external, strict)
+	user, assessment, external := SplitProfilesFromConfig(cfg)
+	return NewProfileStoreWithAssessments(user, assessment, external, strict)
 }
 
-// ProfileToConfig converts a smart profile to config form for saving.
+// ProfileToConfig converts a smart profile to layered config form for saving,
+// placing it into the baseline that matches its source so fields from other
+// layers are preserved.
 func ProfileToConfig(p ModelProfile) config.ModelProfileConfig {
-	return config.ModelProfileConfig{
-		Source:       p.Source,
+	bl := &config.ProfileBaseline{
 		Version:      p.Version,
 		Capabilities: p.Capabilities,
-		Properties: config.ModelPropertiesConfig{
+		Confidence:   p.Confidence,
+		Properties: &config.ModelPropertiesConfig{
 			Vision: p.Properties.Vision,
 			Tools: p.Properties.Tools,
 			ParallelTools: p.Properties.ParallelTools,
@@ -86,6 +100,16 @@ func ProfileToConfig(p ModelProfile) config.ModelProfileConfig {
 			Privacy: p.Properties.Privacy,
 		},
 	}
+	out := config.ModelProfileConfig{}
+	switch p.Source {
+	case SourceSelfAssess:
+		out.AssessmentBaseline = bl
+	case SourceExternal:
+		out.ExternalBaseline = bl
+	default:
+		out.UserOverrides = bl
+	}
+	return out
 }
 
 // RouteFromConfig builds a smart RouteConfig from config.RouteConfig.
@@ -142,10 +166,9 @@ func RouteFromConfig(name string, r config.RouteConfig) RouteConfig {
 			Provider: c.Provider, Model: c.Model, ProfileID: c.Profile, Order: i,
 		})
 	}
-	// default default = first candidate
-	if rc.DefaultProvider == "" && len(rc.Candidates) > 0 {
-		rc.DefaultProvider = rc.Candidates[0].Provider
-		rc.DefaultModel = rc.Candidates[0].Model
-	}
+	// No implicit default: the default model must be set explicitly via
+	// route.default or route.smart.low_confidence_target. When neither is set,
+	// the engine errors on low-confidence / no-winner decisions instead of
+	// silently substituting a model (PRD principle: no hardcoded default model).
 	return rc
 }

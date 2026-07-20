@@ -221,11 +221,11 @@ func (r *Resolver) planDeterministicFromSmart(aliasName, routeName string, route
 		}
 	}
 	if provider == "" {
-		if len(route.Candidates) > 0 {
-			provider, model = route.Candidates[0].Provider, route.Candidates[0].Model
-		} else if len(route.Targets) > 0 {
-			provider, model = route.Targets[0].Provider, route.Targets[0].Model
-		}
+		// No implicit default: when smart routing is off, the operator must
+		// configure an explicit target via route.default or
+		// route.smart.low_confidence_target. We do not silently substitute a
+		// candidate (PRD principle: no hardcoded default model).
+		return nil, fmt.Errorf("route %q has smart routing disabled but no explicit default target; set route.default or route.smart.low_confidence_target", routeName)
 	}
 	p, ok := r.cfg.Providers[provider]
 	if !ok {
@@ -251,6 +251,19 @@ func ToProviderTarget(a Attempt) provider.Target {
 		Model:      a.Model,
 		Config:     a.Config,
 	}
+}
+
+// IsAlias reports whether the requested string matches a configured public
+// alias (case-insensitive). Used to distinguish alias authorization from
+// direct-model authorization.
+func (r *Resolver) IsAlias(requested string) bool {
+	key := strings.ToLower(strings.TrimSpace(requested))
+	for name := range r.cfg.Aliases {
+		if strings.ToLower(name) == key {
+			return true
+		}
+	}
+	return false
 }
 
 // ListPublicModels returns aliases for /v1/models.

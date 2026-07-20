@@ -119,11 +119,12 @@ func (s *Server) handlePlayground(w http.ResponseWriter, r *http.Request) {
 	reg.Register(compatible.NewCompatible())
 	reg.Register(anthropic.New())
 	coord := execution.New(reg, s.Creds, s.Store, s.Log)
+	coord.Cfg = rc.Cfg
 
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	start := time.Now()
-	result, err := coord.Execute(ctx, nreq, plan)
+	result, err := coord.Execute(ctx, nreq, plan, execution.PolicyContext{ClientKey: nil, PublicHosting: rc.Cfg.PublicHosting.Enabled})
 	lat := time.Since(start)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "upstream_error", sanitizeErr(err))

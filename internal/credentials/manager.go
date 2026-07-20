@@ -275,6 +275,17 @@ func GenerateClientKey() (plaintext string, prefix string, hash string, salt str
 	return
 }
 
+// ClientKeyLookupPrefix returns the non-secret lookup prefix for a presented
+// token, matching the stored key_prefix (tr_live_ + 8 hex = 16 chars). Returns
+// "" when the token is not a well-formed tr_live_ key.
+func ClientKeyLookupPrefix(token string) string {
+	const p = "tr_live_"
+	if !strings.HasPrefix(token, p) || len(token) < 16 {
+		return ""
+	}
+	return token[:16]
+}
+
 // HashClientKey derives a hash for a client key using Argon2id.
 func HashClientKey(plaintext, saltB64 string) string {
 	salt, err := base64.RawStdEncoding.DecodeString(saltB64)

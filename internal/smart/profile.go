@@ -47,77 +47,242 @@ func (s *ProfileStore) SetExternalBaselines(external map[string]ModelProfile) {
 	s.External = external
 }
 
-// Resolve returns the effective profile for a candidate.
-// Precedence: user override > assessment baseline > builtin > empty unprofiled.
+// Layers in ascending precedence order (lowest first).
+func (s *ProfileStore) layerOrder(keys []string) [][2]string {
+	// returns list of (source, key) to inspect; we iterate per-field instead.
+	return nil
+}
+
+// Resolve returns the effective profile for a candidate using per-field
+// layered precedence: user override > local assessment > external consensus >
+// built-in (runtime). Each field is taken from the highest-precedence layer
+// that defines it.
 func (s *ProfileStore) Resolve(providerID, modelID, profileID string) (ModelProfile, bool) {
+	r := s.ResolveDetailed(providerID, modelID, profileID)
+	return r.Effective, r.Found
+}
+
+// ResolvedField documents one capability after layered resolution.
+type ResolvedField struct {
+	Value         float64 `json:"value"`
+	Source        string  `json:"source"`
+	BaselineValue float64 `json:"baseline_value"`
+	BaselineSource string `json:"baseline_source"`
+	Confidence    float64 `json:"confidence"`
+}
+
+// ResolvedProfile is the effective profile with per-field provenance.
+type ResolvedProfile struct {
+	ProviderID string                  `json:"provider_id"`
+	ModelID    string                  `json:"model_id"`
+	ProfileID  string                  `json:"profile_id,omitempty"`
+	Found      bool                    `json:"found"`
+	Effective  ModelProfile            `json:"effective"`
+	Capabilities map[string]ResolvedField `json:"capabilities"`
+	PropertySources map[string]string  `json:"property_sources,omitempty"`
+}
+
+func defaultConfidence(source string) float64 {
+	switch source {
+	case SourceUser:
+		return 1.0
+	case SourceSelfAssess:
+		return 0.92
+	case SourceExternal:
+		return 0.86
+	case SourceObserved:
+		return 0.8
+	default:
+		return 0.0
+	}
+}
+
+// profileLayer is one (source, profile) to consider, in ascending precedence.
+func (s *ProfileStore) candidateLayers(key string) []struct {
+	source  string
+	profile *ModelProfile
+} {
+	var layers []struct {
+		source  string
+		profile *ModelProfile
+	}
+	if p, ok := s.External[key]; ok {
+		layers = append(layers, struct {
+			source  string
+			profile *ModelProfile
+		}{SourceExternal, &p})
+	}
+	if p, ok := s.Assessments[key]; ok {
+		layers = append(layers, struct {
+			source  string
+			profile *ModelProfile
+		}{SourceSelfAssess, &p})
+	}
+	if p, ok := s.User[key]; ok {
+		layers = append(layers, struct {
+			source  string
+			profile *ModelProfile
+		}{SourceUser, &p})
+	}
+	return layers
+}
+
+// ResolveDetailed returns per-field layered resolution with provenance.
+func (s *ProfileStore) ResolveDetailed(providerID, modelID, profileID string) ResolvedProfile {
 	keys := []string{}
 	if profileID != "" {
 		keys = append(keys, profileID)
 	}
 	keys = append(keys, ProfileKey(providerID, modelID), modelID)
 
-	// User overrides win entirely when present.
-	for _, k := range keys {
-		if p, ok := s.User[k]; ok {
-			p.ID = k
-			if p.ProviderID == "" {
-				p.ProviderID = providerID
-			}
-			if p.ModelID == "" {
-				p.ModelID = modelID
-			}
-			if p.Source == "" {
-				p.Source = SourceUser
-			}
-			return mergeWithDefaults(p), true
-		}
+	res := ResolvedProfile{
+		ProviderID:     providerID,
+		ModelID:        modelID,
+		ProfileID:      profileID,
+		Capabilities:   map[string]ResolvedField{},
+		PropertySources: map[string]string{},
+		Effective: ModelProfile{
+			ID:          ProfileKey(providerID, modelID),
+			ProviderID:  providerID,
+			ModelID:     modelID,
+			Capabilities: map[string]float64{},
+			Confidence:  map[string]float64{},
+			Source:      SourceUnknown,
+		},
 	}
 
-	// Assessment baseline (next precedence after user override).
-	for _, k := range keys {
-		if p, ok := s.Assessments[k]; ok {
-			p.ID = k
-			if p.ProviderID == "" {
-				p.ProviderID = providerID
+	found := false
+	highestSource := ""
+
+	// Capabilities: per-field across layers in ascending precedence.
+	for _, cap := range AllCapabilities {
+		var value float64
+		var source string
+		var baselineValue float64
+		var baselineSource string
+		for _, key := range keys {
+			layers := s.candidateLayers(key)
+			for _, l := range layers {
+				v, ok := l.profile.Capabilities[cap]
+				if !ok {
+					continue
+				}
+				// lower layer becomes the baseline for the next higher winner
+				baselineValue, baselineSource = value, source
+				value, source = v, l.source
+				found = true
+				if l.source > highestSource {
+					highestSource = l.source
+				}
 			}
-			if p.ModelID == "" {
-				p.ModelID = modelID
-			}
-			if p.Source == "" {
-				p.Source = SourceSelfAssess
-			}
-			return mergeWithDefaults(p), true
 		}
+		if source == "" {
+			continue
+		}
+		conf := defaultConfidence(source)
+		if c, ok := layerConfidence(keys, s, cap); ok {
+			conf = c
+		}
+		res.Capabilities[cap] = ResolvedField{
+			Value:         value,
+			Source:        source,
+			BaselineValue: baselineValue,
+			BaselineSource: baselineSource,
+			Confidence:    conf,
+		}
+		res.Effective.Capabilities[cap] = value
+		res.Effective.Confidence[cap] = conf
 	}
 
-	// External consensus baseline (independent benchmarks).
-	for _, k := range keys {
-		if p, ok := s.External[k]; ok {
-			p.ID = k
-			if p.ProviderID == "" {
-				p.ProviderID = providerID
+	// Properties: per-field across layers in ascending precedence.
+	resolvedProps := ModelProperties{}
+	applyProp := func(get func(*ModelProperties) (any, bool), set func(*ModelProperties, any), name string) {
+		var value any
+		var source string
+		var has bool
+		for _, key := range keys {
+			for _, l := range s.candidateLayers(key) {
+				v, defined := get(&l.profile.Properties)
+				if !defined {
+					continue
+				}
+				source = l.source
+				value = v
+				has = true
+				if l.source > highestSource {
+					highestSource = l.source
+				}
 			}
-			if p.ModelID == "" {
-				p.ModelID = modelID
-			}
-			if p.Source == "" {
-				p.Source = SourceExternal
-			}
-			return mergeWithDefaults(p), true
+		}
+		if has {
+			set(&resolvedProps, value)
+			res.PropertySources[name] = source
+			found = true
 		}
 	}
+	applyProp(
+		func(p *ModelProperties) (any, bool) { if p.Vision == nil { return nil, false }; return *p.Vision, true },
+		func(p *ModelProperties, v any) { b := v.(bool); p.Vision = &b }, "vision")
+	applyParamBool := func(name string, get func(*ModelProperties) *bool, set func(*ModelProperties, *bool)) {
+		applyProp(
+			func(p *ModelProperties) (any, bool) { if get(p) == nil { return nil, false }; return *get(p), true },
+			func(p *ModelProperties, v any) { b := v.(bool); set(p, &b) }, name)
+	}
+	applyParamBool("tools", func(p *ModelProperties) *bool { return p.Tools }, func(p *ModelProperties, b *bool) { p.Tools = b })
+	applyParamBool("parallel_tools", func(p *ModelProperties) *bool { return p.ParallelTools }, func(p *ModelProperties, b *bool) { p.ParallelTools = b })
+	applyParamBool("structured_output", func(p *ModelProperties) *bool { return p.StructuredOutput }, func(p *ModelProperties, b *bool) { p.StructuredOutput = b })
+	applyParamBool("streaming", func(p *ModelProperties) *bool { return p.Streaming }, func(p *ModelProperties, b *bool) { p.Streaming = b })
+	applyProp(
+		func(p *ModelProperties) (any, bool) { if p.ContextWindow == 0 { return nil, false }; return p.ContextWindow, true },
+		func(p *ModelProperties, v any) { p.ContextWindow = v.(int) }, "context_window")
+	applyProp(
+		func(p *ModelProperties) (any, bool) { if p.MaxOutputTokens == 0 { return nil, false }; return p.MaxOutputTokens, true },
+		func(p *ModelProperties, v any) { p.MaxOutputTokens = v.(int) }, "max_output_tokens")
+	applyProp(
+		func(p *ModelProperties) (any, bool) { if p.CostTier == 0 { return nil, false }; return p.CostTier, true },
+		func(p *ModelProperties, v any) { p.CostTier = v.(int) }, "cost_tier")
+	applyProp(
+		func(p *ModelProperties) (any, bool) { if p.LatencyTier == 0 { return nil, false }; return p.LatencyTier, true },
+		func(p *ModelProperties, v any) { p.LatencyTier = v.(int) }, "latency_tier")
+	applyProp(
+		func(p *ModelProperties) (any, bool) { if p.Privacy == "" { return nil, false }; return p.Privacy, true },
+		func(p *ModelProperties, v any) { p.Privacy = v.(string) }, "privacy")
 
-	// No built-in catalog: a model is only profiled if the user has configured a
-	// profile or it has been assessed / imported from independent benchmarks.
-	return ModelProfile{
-		ID: ProfileKey(providerID, modelID), ProviderID: providerID, ModelID: modelID,
-		Source: SourceUnknown, Capabilities: map[string]float64{},
-	}, false
+	res.Effective.Properties = resolvedProps
+	if found {
+		res.Found = true
+		res.Effective.Source = highestSource
+		if res.Effective.Source == "" {
+			res.Effective.Source = SourceUnknown
+		}
+	}
+	return res
+}
+
+func layerConfidence(keys []string, s *ProfileStore, cap string) (float64, bool) {
+	// Confidence is read from the winning (highest) layer that defines the cap.
+	var conf float64
+	var ok bool
+	var bestSource string
+	for _, key := range keys {
+		for _, l := range s.candidateLayers(key) {
+			if c, has := l.profile.Confidence[cap]; has {
+				if l.source >= bestSource {
+					conf, ok = c, true
+					bestSource = l.source
+				}
+			}
+		}
+	}
+	return conf, ok
 }
 
 func mergeWithDefaults(p ModelProfile) ModelProfile {
 	if p.Capabilities == nil {
 		p.Capabilities = map[string]float64{}
+	}
+	if p.Confidence == nil {
+		p.Confidence = map[string]float64{}
 	}
 	if p.Version == "" {
 		p.Version = "user"

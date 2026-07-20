@@ -59,7 +59,53 @@ func ApplyRequestPolicy(nreq *normalization.NormalizedRequest, cfg *config.Confi
 	return nil
 }
 
-// CheckAliasAllowed returns a 403 when the key policy forbids the public route/alias.
+// AuthorizeModel enforces per-key model authorization. Punctuation in the model
+// string is never treated as authorization. A requested model is authorized in
+// exactly one of two ways:
+//
+//	Public alias:   the requested string matches a configured alias -> the key's
+//	                allowed_aliases policy applies.
+//	Direct model:   provider/model (or provider:model) syntax -> this requires
+//	                the server to permit direct models AND the key to permit
+//	                direct models AND (when the key restricts direct models) an
+//	                exact match against the key's allowed_direct_models list.
+//
+// isAlias must be true only when the requested string exactly matches a
+// configured public alias.
+func AuthorizeModel(ck *storage.ClientKey, model string, isAlias, serverAllowDirect bool) *normalization.Error {
+	if isAlias {
+		if ck != nil && !ck.AliasAllowed(model) {
+			return normalization.NewError(normalization.ErrPermissionDenied,
+				fmt.Sprintf("client key is not allowed to use model %q", model), 403)
+		}
+		return nil
+	}
+
+	// Not an alias: only direct-model syntax may be authorized here.
+	isDirect := strings.Contains(model, "/") || strings.Contains(model, ":")
+	if !isDirect {
+		// Unknown, non-alias, non-direct model: deny.
+		return normalization.NewError(normalization.ErrPermissionDenied,
+			fmt.Sprintf("client key is not allowed to use model %q", model), 403)
+	}
+	if !serverAllowDirect {
+		return normalization.NewError(normalization.ErrPermissionDenied,
+			"direct-model access is disabled on this server", 403)
+	}
+	if ck != nil {
+		if !ck.AllowDirectModels {
+			return normalization.NewError(normalization.ErrPermissionDenied,
+				fmt.Sprintf("client key is not allowed to use direct model %q", model), 403)
+		}
+		if !ck.DirectModelAllowed(model) {
+			return normalization.NewError(normalization.ErrPermissionDenied,
+				fmt.Sprintf("client key is not allowed to use direct model %q", model), 403)
+		}
+	}
+	return nil
+}
+
+// CheckAliasAllowed is retained for backward compatibility. Prefer AuthorizeModel.
 func CheckAliasAllowed(ck *storage.ClientKey, model string) *normalization.Error {
 	if ck == nil {
 		return nil

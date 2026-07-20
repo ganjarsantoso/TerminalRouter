@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/termrouter/termrouter/internal/storage"
 )
@@ -70,6 +71,40 @@ func TestPerKeyBodyLimitNoKeyUnlimited(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("no key = no per-key limit, got %d", rec.Code)
+	}
+}
+
+// TestReservationPreventsConcurrentBypass ensures that in-flight requests are
+// counted toward the daily request quota, so that N concurrent in-flight
+// requests with a daily limit of N cannot collectively admit an (N+1)th (PRD §5).
+func TestReservationPreventsConcurrentBypass(t *testing.T) {
+	limit := 2
+	key := &storage.ClientKey{ID: "k1", DailyRequestLimit: &limit}
+
+	lim := NewLimiter(nil, nil)
+	lim.PublicHosting = false
+
+	// Simulate two in-flight requests via reservations.
+	r1 := lim.reserve(key)
+	r2 := lim.reserve(key)
+
+	// A third admission attempt must be rejected because two are reserved.
+	if err := lim.checkDaily(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), key, time.Now().UTC()); err == nil {
+		t.Fatalf("expected 429 with two reserved against limit 2")
+	} else if err.HTTPStatus != http.StatusTooManyRequests {
+		t.Fatalf("expected 429, got %d", err.HTTPStatus)
+	}
+
+	// Releasing one reservation lets a new admission through again.
+	r1()
+	if err := lim.checkDaily(httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil), key, time.Now().UTC()); err != nil {
+		t.Fatalf("after releasing one reservation, admission should pass, got %v", err)
+	}
+
+	// Releasing the second clears the reservation entirely.
+	r2()
+	if _, ok := lim.reserved[key.ID]; ok {
+		t.Fatalf("reservation should be cleared after all releases")
 	}
 }
 

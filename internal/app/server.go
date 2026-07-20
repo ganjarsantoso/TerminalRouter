@@ -72,6 +72,7 @@ func (s *Server) Reload(cfg *config.Config) error {
 func (s *Server) rebuildHandler() {
 	resolver := router.NewResolver(s.Cfg)
 	coord := execution.New(s.Registry, s.Creds, s.Store, s.Log)
+	coord.Cfg = s.Cfg
 	timeout := s.Cfg.Server.RequestTimeout.Duration()
 	if timeout == 0 {
 		timeout = 180 * time.Second
@@ -115,21 +116,28 @@ func (s *Server) rebuildHandler() {
 	mux.HandleFunc("/v1/messages", ant.Messages)
 
 	maxSize, _ := config.ParseMaxRequestSize(s.Cfg.Server.MaxRequestSize)
-	auth := &middleware.Auth{Store: s.Store, AuthRequired: s.Cfg.Server.AuthRequired, Log: s.Log}
+	auth := middleware.NewAuth(s.Store, s.Cfg.Server.AuthRequired, s.Log)
 	limiter := middleware.NewLimiter(s.Store, s.Log)
+	limiter.PublicHosting = s.Cfg.PublicHosting.Enabled
 	proxyNets, _ := middleware.ParseTrustedProxies(s.Cfg.Server.TrustedProxies)
 	proxy := &middleware.TrustedProxy{Networks: proxyNets}
+	globalConc := middleware.NewGlobalConcurrency(s.Cfg.Server.MaxConcurrency, s.Log)
 
-	var h http.Handler = mux
-	h = s.trackActive(h)
-	h = limiter.Middleware(h)
-	h = auth.Middleware(h)
-	h = middleware.PerKeyBodyLimit()(h)
-	h = middleware.MaxBytes(maxSize)(h)
-	h = proxy.Middleware(h)
-	h = middleware.Recovery(h)
-	h = middleware.RequestID(h)
-	s.handler = h
+	// Effective request order (outermost first). Authentication must run before
+	// PerKeyBodyLimit so the per-key policy is known; global concurrency runs
+	// after body limiting so oversized/unauthenticated requests are cheap to
+	// reject; per-key limiter/quotas run last before the handler.
+	s.handler = middleware.Chain(mux,
+		middleware.RequestID,
+		middleware.Recovery,
+		proxy.Middleware,
+		middleware.MaxBytes(maxSize),
+		auth.Middleware,
+		middleware.PerKeyBodyLimit(),
+		globalConc.Middleware,
+		limiter.Middleware,
+		s.trackActive,
+	)
 }
 
 // Handler returns the HTTP handler (useful for tests).
@@ -296,6 +304,9 @@ func LoadRuntime(root string) (*config.Config, config.Paths, *storage.Store, *cr
 	if err != nil {
 		return nil, paths, nil, nil, err
 	}
+	store.SetPricing(func(provider, model string, inTokens, outTokens int) (float64, bool) {
+		return cfg.ComputeCost(provider, model, inTokens, outTokens)
+	})
 	creds, err := credentials.NewManager(cfg.Credentials.Backend, paths.Vault, os.Getenv("TERMROUTER_VAULT_PASSPHRASE"))
 	if err != nil {
 		_ = store.Close()

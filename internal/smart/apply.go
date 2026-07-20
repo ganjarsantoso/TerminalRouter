@@ -22,8 +22,8 @@ type ApplyResult struct {
 // GatewayEngine builds a smart engine from runtime deps.
 func GatewayEngine(cfg *config.Config, store *storage.Store, credsCredentialCheck func(ref string) bool) *Engine {
 	strict := true
-	userProfiles, extProfiles := SplitProfilesFromConfig(cfg)
-	profiles := NewProfileStoreWithAssessments(userProfiles, nil, extProfiles, strict)
+	userProfiles, assessmentProfiles, extProfiles := SplitProfilesFromConfig(cfg)
+	profiles := NewProfileStoreWithAssessments(userProfiles, assessmentProfiles, extProfiles, strict)
 	eng := &Engine{
 		Profiles:  profiles,
 		Providers: map[string]ProviderState{},
@@ -99,22 +99,19 @@ func ApplySmart(
 		newPlan.Attempts = attempts
 		newPlan.Strategy = "fallback" // allow smart fallback among eligible candidates
 	case ModeShadow, ModeOff, "":
-		// Deterministic: use default target only (first eligible default / configured default)
+		// Deterministic: use the explicitly configured default target only. No
+		// implicit fallback to a candidate — the default must be set via
+		// route.default or route.smart.low_confidence_target (no hardcoded model).
 		defP, defM := routeCfg.DefaultProvider, routeCfg.DefaultModel
-		if defP == "" && len(plan.Attempts) > 0 {
-			defP, defM = plan.Attempts[0].ProviderID, plan.Attempts[0].Model
+		if defP == "" {
+			return nil, fmt.Errorf("smart route %q in shadow/off mode requires an explicit default target; set route.default or route.smart.low_confidence_target", plan.RouteName)
 		}
 		attempts, berr := buildAttempts(cfg, []struct{ Provider, Model string }{{defP, defM}})
 		if berr != nil {
-			// fall back to original plan order
-			newPlan.Strategy = "direct"
-			if len(plan.Attempts) > 1 {
-				newPlan.Strategy = "fallback"
-			}
-		} else {
-			newPlan.Attempts = attempts
-			newPlan.Strategy = "direct"
+			return nil, berr
 		}
+		newPlan.Attempts = attempts
+		newPlan.Strategy = "direct"
 	default:
 		newPlan.Strategy = "fallback"
 	}

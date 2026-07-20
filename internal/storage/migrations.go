@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS client_keys (
     daily_estimated_cost_usd REAL,
     max_output_tokens INTEGER,
     max_request_body INTEGER,
+    allow_direct_models INTEGER NOT NULL DEFAULT 0,
+    allowed_direct_models TEXT, -- JSON array; empty/null with allow_direct_models=1 = unrestricted
     expires_at TEXT,
     portable INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
@@ -190,7 +192,8 @@ CREATE TABLE IF NOT EXISTS external_profile_proposals (
     fields_json TEXT NOT NULL,
     created_at TEXT NOT NULL,
     status TEXT NOT NULL,
-    registry_version TEXT NOT NULL
+    registry_version TEXT NOT NULL,
+    mandatory_review INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_external_proposals_status ON external_profile_proposals(status);
@@ -214,7 +217,7 @@ CREATE TABLE IF NOT EXISTS external_registry_versions (
 );
 `
 
-const currentSchemaVersion = 7
+const currentSchemaVersion = 9
 
 // migrationSQLv6 adds per-key public-hosting policy columns and client labels.
 // Applied for databases created before schema version 6 (CREATE IF NOT EXISTS
@@ -234,4 +237,18 @@ var migrationSQLv6 = []string{
 // migrationSQLv7 adds the per-key request body size cap.
 var migrationSQLv7 = []string{
 	`ALTER TABLE client_keys ADD COLUMN max_request_body INTEGER`,
+}
+
+// migrationSQLv8 adds per-key direct-model access controls. Direct-model access
+// defaults to disabled so that existing keys cannot bypass alias policy via
+// provider/model syntax.
+var migrationSQLv8 = []string{
+	`ALTER TABLE client_keys ADD COLUMN allow_direct_models INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE client_keys ADD COLUMN allowed_direct_models TEXT`,
+}
+
+// migrationSQLv9 persists the external-consensus proposal mandatory-review flag
+// (§18) so it survives a load/apply round-trip and cannot be silently cleared.
+var migrationSQLv9 = []string{
+	`ALTER TABLE external_profile_proposals ADD COLUMN mandatory_review INTEGER NOT NULL DEFAULT 0`,
 }

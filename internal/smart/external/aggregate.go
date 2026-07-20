@@ -1,30 +1,57 @@
 package external
 
 import (
-	"fmt"
 	"math"
 	"sort"
 	"time"
 )
 
 // buildConsensus computes the external-consensus profile for a model identity
-// from a set of (live-fetched or cached) evidence records.
+// from a set of (live-fetched or cached) evidence records. It applies the §18
+// variant-matching rules (exclude incompatible/family-only, reduce strong-
+// probable with mandatory review) and the §19 experiment dedup + source-family
+// contribution caps.
 func buildConsensus(id ModelIdentity, recs []EvidenceRecord) ConsensusProfile {
 	byCap := map[CapabilityKey][]EvidenceRecordWithNorm{}
-	seen := map[string]bool{}
+	excludedByCap := map[CapabilityKey]int{}
 	var sourceSet []SourceID
 	sourceSeen := map[SourceID]bool{}
 
+	// Track canonical experiments so mirrors fold into provenance rather than
+	// inflating the evidence set (§19).
+	seenExpIdx := map[string]int{}
+	seenExpCap := map[string]CapabilityKey{}
+
 	for _, r := range recs {
-		// Dedupe identical evidence (same source+benchmark+value+capability).
-		dkey := fmt.Sprintf("%s|%s|%s|%.4f|%s", r.Source, r.ModelIdentity, r.Benchmark, r.Value, r.Capability)
-		if seen[dkey] {
+		// Schema/registry validation (§16): reject records that are malformed
+		// or outside the native range. Unverified (non-approved-domain) records
+		// contribute zero automatic score weight unless explicitly promoted.
+		if vr := ValidateEvidenceRecord(r); !vr.OK || vr.Unverified {
 			continue
 		}
-		seen[dkey] = true
+
+		// Variant matching (§18): decide whether this evidence may contribute.
+		match := id.Match(r.Published)
+		if !match.Contributes {
+			excludedByCap[r.Capability]++
+			continue
+		}
+
+		// Dedupe by canonical experiment key (§19): keep the first, fold the
+		// rest into provenance URLs.
+		ekey := CanonicalExperimentKey(r, id)
+		if idx, ok := seenExpIdx[ekey]; ok {
+			if r.URL != "" {
+				cap0 := seenExpCap[ekey]
+				byCap[cap0][idx].Evidence.ProvenanceURLs = appendUnique(byCap[cap0][idx].Evidence.ProvenanceURLs, r.URL)
+			}
+			continue
+		}
 
 		n := normalize(r)
-		en := EvidenceRecordWithNorm{Evidence: r, Normal: n}
+		en := EvidenceRecordWithNorm{Evidence: r, Normal: n, Match: match, Weight: match.Weight}
+		seenExpIdx[ekey] = len(byCap[r.Capability])
+		seenExpCap[ekey] = r.Capability
 		byCap[r.Capability] = append(byCap[r.Capability], en)
 		if !sourceSeen[r.Source] {
 			sourceSeen[r.Source] = true
@@ -34,21 +61,33 @@ func buildConsensus(id ModelIdentity, recs []EvidenceRecord) ConsensusProfile {
 
 	caps := map[CapabilityKey]ConsensusCapability{}
 	var overallVals []float64
+	mandatory := false
 	for _, c := range CapabilityKeys {
 		list := byCap[c]
 		if len(list) == 0 {
 			continue
 		}
-		est, conf, low, high, primary := aggregateCapability(list)
+		// Source-family contribution caps (§19).
+		capped, capsExcluded := applyContributionCaps(list)
+		excludedByCap[c] += capsExcluded
+		if len(capped) == 0 {
+			continue
+		}
+		est, conf, low, high, primary, review := aggregateCapability(capped)
+		if review {
+			mandatory = true
+		}
 		caps[c] = ConsensusCapability{
-			Capability:    c,
-			Estimate:      roundHalf(est),
-			Confidence:    conf,
-			LowBand:       roundHalf(low),
-			HighBand:      roundHalf(high),
-			SourceCount:   len(list),
-			Contributing:  list,
-			PrimarySource: primary,
+			Capability:     c,
+			Estimate:       roundHalf(est),
+			Confidence:     conf,
+			LowBand:        roundHalf(low),
+			HighBand:       roundHalf(high),
+			SourceCount:    len(capped),
+			Contributing:   capped,
+			PrimarySource:  primary,
+			MandatoryReview: review,
+			ExcludedCount:  excludedByCap[c],
 		}
 		overallVals = append(overallVals, est)
 	}
@@ -59,26 +98,43 @@ func buildConsensus(id ModelIdentity, recs []EvidenceRecord) ConsensusProfile {
 	}
 
 	return ConsensusProfile{
-		ModelIdentity: id.ID,
-		ProviderID:    id.Provider,
-		ModelID:       id.Model,
-		Capabilities:  caps,
-		Overall:       roundHalf(overall),
-		Sources:       sourceSet,
-		Confidence:    overallConfidence(caps),
-		GeneratedAt:   time.Now().UTC(),
+		ModelIdentity:   id.ID,
+		ProviderID:      id.Provider,
+		ModelID:         id.Model,
+		Capabilities:    caps,
+		Overall:         roundHalf(overall),
+		Sources:         sourceSet,
+		Confidence:      overallConfidence(caps),
+		GeneratedAt:     time.Now().UTC(),
+		MandatoryReview: mandatory,
 	}
 }
 
-// aggregateCapability returns (estimate, confidence, lowBand, highBand, primarySource).
-func aggregateCapability(list []EvidenceRecordWithNorm) (float64, float64, float64, float64, SourceID) {
+func appendUnique(s []string, v string) []string {
+	for _, x := range s {
+		if x == v {
+			return s
+		}
+	}
+	return append(s, v)
+}
+
+// aggregateCapability returns (estimate, confidence, lowBand, highBand,
+// primarySource, mandatoryReview).
+func aggregateCapability(list []EvidenceRecordWithNorm) (float64, float64, float64, float64, SourceID, bool) {
+	mandatoryReview := false
+	for _, e := range list {
+		if e.Match.MandatoryReview {
+			mandatoryReview = true
+		}
+	}
 	if len(list) == 1 {
 		n := list[0].Normal
-		return n.Normalized, tierWeight(n.Tier) * 0.6, math.Max(0, n.Normalized-1), math.Min(10, n.Normalized+1), n.Source
+		return n.Normalized, recordWeight(list[0]) * 0.6, math.Max(0, n.Normalized-1), math.Min(10, n.Normalized+1), n.Source, mandatoryReview
 	}
 
 	// Weighted trimmed mean: sort by normalized, drop the single highest/lowest
-	// if we have >=4 samples, weight by trust tier.
+	// if we have >=4 samples, weight by trust tier * identity-match weight.
 	sorted := make([]EvidenceRecordWithNorm, len(list))
 	copy(sorted, list)
 	sort.Slice(sorted, func(i, j int) bool {
@@ -93,7 +149,7 @@ func aggregateCapability(list []EvidenceRecordWithNorm) (float64, float64, float
 
 	var wsum, vsum float64
 	for i := lo; i <= hi; i++ {
-		w := tierWeight(sorted[i].Normal.Tier)
+		w := recordWeight(sorted[i])
 		wsum += w
 		vsum += w * sorted[i].Normal.Normalized
 	}
@@ -112,7 +168,7 @@ func aggregateCapability(list []EvidenceRecordWithNorm) (float64, float64, float
 	agreement := 1.0 - clamp01(spread/10.0)
 	avgTrust := 0.0
 	for i := lo; i <= hi; i++ {
-		avgTrust += tierWeight(sorted[i].Normal.Tier)
+		avgTrust += recordWeight(sorted[i])
 	}
 	avgTrust /= float64(hi - lo + 1)
 	conf := clamp01(agreement*0.6 + avgTrust*0.4)
@@ -121,16 +177,16 @@ func aggregateCapability(list []EvidenceRecordWithNorm) (float64, float64, float
 	low := math.Max(0, robust-band)
 	high := math.Min(10, robust+band)
 
-	// Primary source = highest-trust source among the window.
+	// Primary source = highest-weighted source among the window.
 	primary := sorted[lo].Normal.Source
-	bestW := tierWeight(sorted[lo].Normal.Tier)
+	bestW := recordWeight(sorted[lo])
 	for i := lo + 1; i <= hi; i++ {
-		if w := tierWeight(sorted[i].Normal.Tier); w > bestW {
+		if w := recordWeight(sorted[i]); w > bestW {
 			bestW = w
 			primary = sorted[i].Normal.Source
 		}
 	}
-	return robust, conf, low, high, primary
+	return robust, conf, low, high, primary, mandatoryReview
 }
 
 func weightedMedian(items []EvidenceRecordWithNorm) float64 {

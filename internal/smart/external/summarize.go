@@ -40,9 +40,17 @@ func summarizeEvidence(ctx context.Context, sum Summarizer, srch Searcher, id Mo
 				src = SourceLMArena
 			}
 		}
+		// The published identity must be established from what the evidence
+		// actually reports (summary.Model), not copied from the configured
+		// identity. Copying would make variant matching (§18) always report
+		// "exact" and silently credit a preview/thinking variant to the base
+		// model. parsePublishedIdentity returns a zero identity (treated as
+		// exact by Match) only when the source gave no model name.
+		published := parsePublishedIdentity(summary.Model)
 		recs = append(recs, EvidenceRecord{
 			Source:        src,
 			ModelIdentity: id.ID,
+			Published:     published,
 			Benchmark:     "llm-summary/" + string(c.Capability),
 			Value:         c.Score * 10.0, // store as 0-100 for consistent normalization
 			Scale:         ScaleZeroToHundred,

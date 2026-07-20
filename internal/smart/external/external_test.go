@@ -10,9 +10,9 @@ type mockSearcher struct{}
 
 func (mockSearcher) Search(_ context.Context, _ string) ([]SearchResult, error) {
 	return []SearchResult{
-		{Title: "GPT-4o benchmarks", Snippet: "GPT-4o scores 72.1% on LiveBench overall and 68.4% on LiveBench reasoning. LiveBench math is 70.2%.", URL: "https://example.com/a"},
-		{Title: "GPT-4o SWE-bench", Snippet: "GPT-4o achieves 51.0% on SWE-bench Verified.", URL: "https://example.com/b"},
-		{Title: "GPT-4o Artificial Analysis", Snippet: "GPT-4o has an Artificial Analysis Intelligence Index of 19.", URL: "https://example.com/c"},
+		{Title: "GPT-4o benchmarks", Snippet: "GPT-4o scores 72.1% on LiveBench overall and 68.4% on LiveBench reasoning. LiveBench math is 70.2%.", URL: "https://livebench.ai/leaderboard"},
+		{Title: "GPT-4o SWE-bench", Snippet: "GPT-4o achieves 51.0% on SWE-bench Verified.", URL: "https://www.swebench.com/verified"},
+		{Title: "GPT-4o Artificial Analysis", Snippet: "GPT-4o has an Artificial Analysis Intelligence Index of 19.", URL: "https://artificialanalysis.ai/intelligence-index"},
 	}, nil
 }
 

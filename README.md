@@ -4,13 +4,14 @@
 
 ### One local AI endpoint. Multiple providers. Intelligent model selection.
 
-**TermRouter is a lightweight, terminal-only AI gateway that securely connects OpenAI, Anthropic, OpenAI-compatible APIs, and local model servers through a single interface.**
+**TermRouter is a lightweight, terminal-first AI gateway written in Go. It gives coding agents, IDEs, scripts, and applications one stable OpenAI-compatible or Anthropic-compatible endpoint while routing requests to cloud providers, OpenAI-compatible services, or local model servers.**
 
-TermRouter normalizes requests, protects provider credentials, exposes stable model aliases, supports streaming and fallback, and can automatically select the most suitable configured model for each task with **Smart Routes**.
+TermRouter centralizes provider credentials, normalizes protocols, exposes stable public model names, supports ordered fallback and safe streaming, and can automatically choose the most suitable configured model through **Smart Routes**.
 
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Interface: Terminal](https://img.shields.io/badge/Interface-Terminal-24292f)](#cli-reference)
+[![Interface: Terminal-first](https://img.shields.io/badge/Interface-Terminal--first-24292f)](#cli-reference)
+[![Optional Console](https://img.shields.io/badge/Console-Local--only-24292f)](#termrouter-console)](#cli-reference)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI--compatible-412991)](#api-compatibility)
 [![Anthropic Compatible](https://img.shields.io/badge/API-Anthropic--compatible-D97757)](#api-compatibility)
 [![Smart Routes](https://img.shields.io/badge/Routing-Task--aware-7C3AED)](#smart-routes)
@@ -28,245 +29,376 @@ AI applications often require different API keys, base URLs, request formats, mo
 TermRouter places one small local gateway between your clients and providers:
 
 ```text
-OpenAI-compatible clients ─────┐
-Anthropic-compatible clients ──┤
-Coding agents and IDEs ────────┼──> TermRouter ──> OpenAI
-Custom scripts and services ───┤       │          ├─> Anthropic
-Local development tools ───────┘       │          ├─> OpenAI-compatible APIs
-                                       │          └─> Local model servers
-                                       │
-                                       ├─ Client authentication
-                                       ├─ Protocol normalization
-                                       ├─ Secure credential resolution
-                                       ├─ Stable model aliases
-                                       ├─ Direct and fallback routes
-                                       ├─ Task-aware Smart Routes
-                                       ├─ SSE streaming
-                                       └─ Privacy-conscious observability
+Clients and coding agents
+          │
+          │ OpenAI or Anthropic-compatible request
+          ▼
+┌───────────────────────────────────────────────────────────┐
+│                       TermRouter                          │
+│                                                           │
+│  Client authentication     Protocol normalization         │
+│  Alias resolution          Direct / fallback / smart      │
+│  Capability filtering      Cost and privacy policy        │
+│  Session affinity          Retry and circuit handling     │
+│  Usage enforcement         Metadata-only observability    │
+└───────────────┬──────────────────────┬────────────────────┘
+                │                      │
+        Cloud providers        Local model servers
+     OpenAI · Anthropic ·       Ollama · LM Studio ·
+      compatible services             vLLM
 ```
 
-Configure providers once, expose stable aliases such as `coding` or `auto`, and point compatible clients at:
+---
 
-```text
-http://127.0.0.1:8787
-```
+## Table of contents
+
+- [Why TermRouter](#why-termrouter)
+- [Core capabilities](#core-capabilities)
+- [How routing works](#how-routing-works)
+- [Architecture](#architecture)
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Five-minute quick start](#five-minute-quick-start)
+- [Provider configuration](#provider-configuration)
+- [Unified routing workflow](#unified-routing-workflow)
+- [Smart Routes](#smart-routes)
+- [Model profiles](#model-profiles)
+- [Independent benchmark consensus](#independent-benchmark-consensus)
+- [Local model assessment](#local-model-assessment)
+- [Client keys and policy controls](#client-keys-and-policy-controls)
+- [Connect applications](#connect-applications)
+- [API compatibility](#api-compatibility)
+- [Streaming and fallback guarantees](#streaming-and-fallback-guarantees)
+- [TermRouter Console](#termrouter-console)
+- [Public VPS deployment](#public-vps-deployment)
+- [Security model](#security-model)
+- [Configuration](#configuration)
+- [Observability and diagnostics](#observability-and-diagnostics)
+- [CLI reference](#cli-reference)
+- [Development and testing](#development-and-testing)
+- [Project layout](#project-layout)
+- [Current limits](#current-limits)
+- [Troubleshooting](#troubleshooting)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License](#license)
+
+---
 
 ## Why TermRouter?
 
-### One configuration for every client
+AI clients usually couple four concerns that should be managed independently:
 
-Provider credentials, endpoints, aliases, and routing rules live in TermRouter instead of being duplicated across every agent and application.
+1. the client-facing API protocol;
+2. provider credentials and upstream endpoints;
+3. model names and routing decisions;
+4. operational controls such as quotas, retries, cost, and privacy.
 
-### One stable model name
+TermRouter separates those concerns. Configure providers once, expose stable aliases such as `coding`, `fast`, or `auto`, and point every compatible client to TermRouter.
 
-Clients can request an alias such as `coding`. The upstream provider and model can change without requiring client reconfiguration.
+### One endpoint for many clients
 
-### Automatic task-aware model selection
+```text
+http://127.0.0.1:8787/v1
+```
 
-Clients can request `auto`. Smart Routes analyzes the task, checks capability and policy constraints, scores eligible configured models, preserves session affinity, and produces an explainable execution plan.
+The caller uses a TermRouter client key. Upstream provider credentials remain inside TermRouter and are resolved only after routing selects a target.
 
-### Safer credentials
+### Stable public model names
 
-Provider credentials are resolved from environment references, an encrypted vault, or the operating-system keyring only after routing chooses an upstream target. Router client keys are stored as Argon2id hashes.
+Clients can request `coding` even when the actual upstream target changes from one provider or model to another. Client configuration remains stable while infrastructure evolves.
 
-### Lightweight operation
+### Three routing modes
 
-TermRouter is a terminal-first Go application with no browser dashboard and no separate frontend runtime.
+```text
+Single Model  → one deterministic provider/model target
+Fallback      → ordered targets with safe pre-commit failover
+Smart         → task-aware model selection plus ordered execution
+```
 
-## Feature overview
+### Security and cost controls at the gateway
 
-### Gateway and compatibility
+TermRouter can enforce alias restrictions, direct-model permissions, requests per minute, per-key concurrency, body-size limits, daily request and token quotas, output-token limits, expiration, and daily estimated-spend budgets before an upstream provider is called.
 
-* OpenAI-compatible Chat Completions endpoint
-* Anthropic-compatible Messages endpoint
-* Non-streaming responses
-* Server-Sent Events streaming
-* OpenAI, Anthropic, and custom OpenAI-compatible upstream providers
-* Support for local OpenAI-compatible servers such as Ollama, LM Studio, and vLLM
-* Model listing through public aliases
+### Terminal first, browser optional
+
+Every essential operation is available from the CLI. The optional Web Console is embedded in the Go application and serves as a local management interface, not as a public administration dashboard.
+
+---
+
+## Core capabilities
+
+### Gateway and protocol compatibility
+
+- OpenAI-compatible `POST /v1/chat/completions`
+- Anthropic-compatible `POST /v1/messages`
+- OpenAI-style and Anthropic-style client authentication
+- Non-streaming and Server-Sent Events streaming responses
+- Request and response normalization through a provider-neutral internal model
+- Tool calls and tool results
+- Structured-output and request capability signals
+- OpenAI, Anthropic, and custom OpenAI-compatible upstream providers
+- Local endpoints such as Ollama, LM Studio, and vLLM
+- Public model discovery through aliases
 
 ### Routing
 
-* Direct model aliases
-* Ordered provider/model fallback
-* Provider health and eligibility checks
-* Existing retry and fallback execution plans
-* Smart Routes for automatic task-aware model selection
-* Candidate capability filtering
-* Configurable routing policies
-* Confidence-aware default selection
-* Session affinity
-* Shadow evaluation mode
-* Historical decision explanation
+- Direct aliases
+- Ordered fallback routes
+- Task-aware Smart Routes
+- Hard capability filtering before preference scoring
+- Provider health and circuit-state checks
+- Configurable balanced, quality, economy, fast, and private policies
+- Low-confidence target handling
+- Deterministic tie-breaking
+- Session affinity for related turns
+- Shadow evaluation before live activation
+- Historical routing explanations
 
-### Security
+### Model intelligence
 
-* Localhost-only listener by default
-* Separate router client keys and upstream provider credentials
-* Argon2id-hashed router client keys
-* Environment-variable credential references
-* ChaCha20-Poly1305 encrypted local vault
-* OS-keyring credential references
-* Metadata-only logs by default
-* Secret redaction
-* Sanitized configuration export
+- Layered model profiles
+- Independent external benchmark consensus
+- Source trust and provenance controls
+- Exact and probable model-variant matching
+- Mandatory human review for uncertain variant matches
+- Local model self-assessment
+- Per-field confidence and provenance
+- User overrides that remain higher priority than imported baselines
 
-### Operations
+### Security and operations
 
-* Provider validation and connectivity tests
-* Health and readiness endpoints
-* Status and doctor commands
-* Structured logs
-* Usage summaries
-* SQLite-backed health, usage, smart-decision, and session-affinity state
-* Machine-readable JSON output where supported
+- Loopback binding by default
+- Argon2id-hashed client keys
+- Credential references through environment variables, encrypted vault, or OS keyring
+- XChaCha20-Poly1305 vault encryption
+- Portable-key restrictions for public deployments
+- Fail-closed quota enforcement
+- Per-key and global concurrency controls
+- Direct-model authorization controls
+- Request-size and message/tool limits
+- Request ID validation
+- Invalid-auth throttling
+- Metadata-only logs by default
+- Secret redaction and sanitized configuration exports
+- SQLite-backed usage, health, decision, assessment, and affinity state
 
-## Project status
+---
 
-TermRouter is an MVP intended for local development and trusted self-hosted environments.
+## How routing works
 
-### Implemented
+### Fixed route request
 
-* OpenAI-compatible `POST /v1/chat/completions`
-* Anthropic-compatible `POST /v1/messages`
-* Non-streaming and SSE streaming responses
-* OpenAI, Anthropic, and custom OpenAI-compatible providers
-* Direct aliases and ordered fallback routes
-* Smart-route configuration and model profiles
-* Heuristic task classification
-* Smart candidate selection before execution
-* Diagnostic routing headers
-* Shadow and live Smart Route modes
-* Smart decision persistence
-* Session-affinity persistence
-* Request and prompt-level route explanation
-* Environment, encrypted-vault, and OS-keyring credential references
-* Argon2id-hashed router client keys
-* SQLite-backed health and usage metadata
-* Structured metadata logs with redaction
-* Configuration validation, diagnostics, and sanitized export
+```text
+Client request
+    │
+    ├─ authenticate TermRouter client key
+    ├─ enforce body, concurrency, quota, and authorization policy
+    ├─ parse OpenAI or Anthropic request
+    ├─ normalize into TermRouter's provider-neutral representation
+    ├─ resolve alias into direct or fallback execution plan
+    ├─ resolve credential for the selected provider
+    ├─ execute, retry, or safely fall back
+    ├─ normalize the provider response
+    └─ record privacy-conscious request metadata
+```
 
-### Current limitations
+### Smart route request
 
-* No native TLS termination
-* No web dashboard
-* No native Gemini endpoint
-* No embeddings, image-generation, audio, or video routing
-* No distributed or multi-node deployment
-* Smart Routes use configured model profiles and local classification; automatic learned routing is not part of the current MVP
+```text
+Request model="auto"
+        │
+        ▼
+Normalized request
+        │
+        ▼
+Local task classification
+  category · complexity · requirements · confidence
+        │
+        ▼
+Hard filtering
+  tools · vision · context · privacy · credentials · health
+        │
+        ▼
+Policy-aware candidate scoring
+  task fit · quality · reliability · cost · latency · privacy
+        │
+        ▼
+Session-affinity and confidence handling
+        │
+        ▼
+Immutable ordered execution plan
+        │
+        ▼
+Existing execution, retry, circuit, and streaming engine
+```
 
-> \\\[!WARNING]
-> TermRouter does not provide native TLS in the current MVP. Do not expose the TermRouter listener directly to the public internet. For remote use, keep TermRouter bound to localhost and use SSH port forwarding, Tailscale, WireGuard, or an authenticated TLS reverse proxy.
+Smart Routes select who should answer. They do not run multiple candidate models in parallel, judge competing answers, merge outputs, or alter provider responses.
 
-\---
+---
+
+## Architecture
+
+TermRouter intentionally separates protocol handling, routing decisions, execution, security, and persistence.
+
+```text
+┌────────────────────────────────────────────────────────────┐
+│ Client interfaces                                          │
+│ OpenAI-compatible · Anthropic-compatible · CLI · Console   │
+└──────────────────────────┬─────────────────────────────────┘
+                           ▼
+┌────────────────────────────────────────────────────────────┐
+│ HTTP middleware                                            │
+│ Request ID → recovery → trusted proxy → global body limit  │
+│ → authentication → per-key body limit → global concurrency │
+│ → per-key policy/quota → request tracking                  │
+└──────────────────────────┬─────────────────────────────────┘
+                           ▼
+┌────────────────────────────────────────────────────────────┐
+│ Protocol normalization                                     │
+│ Messages · content blocks · tools · usage · stream events  │
+└──────────────────────────┬─────────────────────────────────┘
+                           ▼
+┌────────────────────────────────────────────────────────────┐
+│ Routing                                                    │
+│ Alias resolver · fallback plan · Smart Route engine        │
+│ Task classifier · profile resolver · session affinity      │
+└──────────────────────────┬─────────────────────────────────┘
+                           ▼
+┌────────────────────────────────────────────────────────────┐
+│ Execution                                                  │
+│ Credential resolution · provider registry · retry/fallback │
+│ Circuit state · stream commitment · usage accounting       │
+└──────────────┬──────────────────────────────┬──────────────┘
+               ▼                              ▼
+       Provider adapters                 SQLite state
+  OpenAI · Anthropic · compatible     keys · usage · health
+                                     decisions · profiles
+                                     assessments · history
+```
+
+### Architectural boundaries
+
+- **Configuration:** providers, aliases, routes, Smart Route options, pricing, model profiles, hosting, and logging.
+- **Normalization:** provider-neutral requests, responses, content blocks, tool calls, usage, errors, and stream events.
+- **Router:** turns a public alias into an immutable attempt plan.
+- **Smart engine:** classifies tasks, filters candidates, scores eligible models, and selects an ordered plan.
+- **Execution coordinator:** resolves credentials and executes retry/fallback without duplicating routing logic.
+- **Provider adapters:** translate normalized data to and from provider-specific APIs.
+- **Storage:** persists authentication data, usage, provider health, Smart Decisions, session affinity, profile evidence, assessments, and configuration history.
+- **Console:** presents a local browser interface over administrative APIs while preserving terminal-first operation.
+
+---
 
 ## Requirements
 
-* Go **1.22 or newer** to build from source
-* At least one supported cloud provider or local OpenAI-compatible server
-* A supported credential backend for provider secrets
+- Go **1.26 or newer** to build the current source tree
+- At least one supported cloud provider or local OpenAI-compatible server
+- A credential backend: encrypted vault, OS keyring, or environment references
+- Node.js tooling only when developing the embedded Web Console
 
-The compiled TermRouter binary does not require Go at runtime.
+The compiled Go binary does not require Go at runtime.
+
+---
 
 ## Installation
 
-### Clone and build
+### Build from source
 
 ```bash
 git clone https://github.com/ganjarsantoso/TerminalRouter.git
 cd TerminalRouter
-go build -o bin/termrouter ./cmd/termrouter
-```
-
-Verify the binary:
-
-```bash
+go build -trimpath -o bin/termrouter ./cmd/termrouter
 ./bin/termrouter version
 ```
 
-### Linux or macOS installation
+### Install on Linux or macOS
 
 ```bash
 sudo install -m 0755 bin/termrouter /usr/local/bin/termrouter
 termrouter version
 ```
 
-### Windows PowerShell
+### Build on Windows PowerShell
 
 ```powershell
 git clone https://github.com/ganjarsantoso/TerminalRouter.git
 Set-Location TerminalRouter
-go build -o bin\\\\termrouter.exe .\\\\cmd\\\\termrouter
-.\\\\bin\\\\termrouter.exe version
+go build -o bin\termrouter.exe .\cmd\termrouter
+.\bin\termrouter.exe version
 ```
 
-You can invoke `bin\\\\termrouter.exe` directly or place the binary in a directory included in `PATH`.
+### Useful Make targets
 
-\---
+```bash
+make build
+make test
+make race
+make fmt
+make vet
+make clean
+```
 
-## Quick start
+---
 
-This setup creates an encrypted local vault, generates a router client key, adds an OpenAI provider, creates a fixed alias, and starts the gateway.
+## Five-minute quick start
 
-### 1\. Initialize TermRouter
+### 1. Initialize TermRouter
 
 ```bash
 termrouter init --backend vault --create-key
 ```
 
-TermRouter creates its home directory and prints a router client key beginning with `tr\\\_live\\\_`.
+TermRouter creates its configuration directory and prints a client key beginning with `tr_live_`.
 
-> \\\[!IMPORTANT]
-> Save the printed client key immediately. TermRouter stores only the Argon2id hash and cannot display the plaintext key again.
+> [!IMPORTANT]
+> Save the plaintext key immediately. TermRouter stores only its Argon2id hash and cannot display the same plaintext key later.
 
-### 2\. Add a provider
-
-Set the upstream provider credential:
+If the vault backend is used in a headless environment, provide its passphrase through the supported runtime mechanism:
 
 ```bash
-export OPENAI\\\_API\\\_KEY='sk-...'
+export TERMROUTER_VAULT_PASSPHRASE='use-a-strong-secret'
 ```
 
-Add an OpenAI connection that references the environment variable:
+### 2. Add a provider
 
 ```bash
-termrouter provider add \\\\
-  --name openai-main \\\\
-  --type openai \\\\
-  --env OPENAI\\\_API\\\_KEY
+export OPENAI_API_KEY='sk-...'
+
+termrouter provider add \
+  --name openai-main \
+  --type openai \
+  --env OPENAI_API_KEY
 ```
 
-Test the provider before creating routes:
+Validate connectivity:
 
 ```bash
 termrouter provider test openai-main
 ```
 
-### 3\. Create a fixed alias
+### 3. Create a Single Model alias
 
 ```bash
-termrouter alias add coding \\\\
-  --provider openai-main \\\\
+termrouter alias add coding \
+  --provider openai-main \
   --model gpt-4o-mini
 ```
 
-Applications request `coding`; TermRouter resolves the real provider and model.
-
-### 4\. Start the gateway
+### 4. Start the gateway
 
 ```bash
 termrouter serve
 ```
 
-The default listener is:
+Default endpoints:
 
 ```text
-http://127.0.0.1:8787
+Gateway: http://127.0.0.1:8787
+OpenAI:  http://127.0.0.1:8787/v1
 ```
 
-### 5\. Verify the gateway
-
-Open another terminal:
+### 5. Verify the service
 
 ```bash
 curl http://127.0.0.1:8787/health
@@ -276,98 +408,83 @@ curl http://127.0.0.1:8787/ready
 List public aliases:
 
 ```bash
-curl http://127.0.0.1:8787/v1/models \\\\
-  -H "Authorization: Bearer tr\\\_live\\\_<your-router-client-key>"
+curl http://127.0.0.1:8787/v1/models \
+  -H "Authorization: Bearer $TERMROUTER_API_KEY"
 ```
 
-Send a test completion:
+Send a completion:
 
 ```bash
-curl http://127.0.0.1:8787/v1/chat/completions \\\\
-  -H "Authorization: Bearer tr\\\_live\\\_<your-router-client-key>" \\\\
-  -H "Content-Type: application/json" \\\\
+curl http://127.0.0.1:8787/v1/chat/completions \
+  -H "Authorization: Bearer $TERMROUTER_API_KEY" \
+  -H "Content-Type: application/json" \
   -d '{
     "model": "coding",
-    "messages": \\\[
-      {
-        "role": "user",
-        "content": "Reply with exactly: TermRouter works"
-      }
+    "messages": [
+      {"role": "user", "content": "Reply with exactly: TermRouter works"}
     ]
   }'
 ```
 
-\---
+---
 
-## Connect providers
+## Provider configuration
 
 ### OpenAI
 
 ```bash
-export OPENAI\\\_API\\\_KEY='sk-...'
+export OPENAI_API_KEY='sk-...'
 
-termrouter provider add \\\\
-  --name openai-main \\\\
-  --type openai \\\\
-  --env OPENAI\\\_API\\\_KEY
+termrouter provider add \
+  --name openai-main \
+  --type openai \
+  --env OPENAI_API_KEY
 ```
 
 ### Anthropic
 
 ```bash
-export ANTHROPIC\\\_API\\\_KEY='sk-ant-...'
+export ANTHROPIC_API_KEY='sk-ant-...'
 
-termrouter provider add \\\\
-  --name anthropic-main \\\\
-  --type anthropic \\\\
-  --env ANTHROPIC\\\_API\\\_KEY
+termrouter provider add \
+  --name anthropic-main \
+  --type anthropic \
+  --env ANTHROPIC_API_KEY
 ```
 
 ### Custom OpenAI-compatible provider
 
 ```bash
-export PROVIDER\\\_API\\\_KEY='...'
+export PROVIDER_API_KEY='...'
 
-termrouter provider add \\\\
-  --name compatible-main \\\\
-  --type openai-compatible \\\\
-  --base-url https://provider.example.com/v1 \\\\
-  --env PROVIDER\\\_API\\\_KEY
+termrouter provider add \
+  --name compatible-main \
+  --type openai-compatible \
+  --base-url https://provider.example.com/v1 \
+  --env PROVIDER_API_KEY
 ```
 
 ### Local OpenAI-compatible server
 
-TermRouter can route to local endpoints such as Ollama, LM Studio, or vLLM.
-
-Using standard input for an endpoint that does not require a key:
+For a local endpoint that does not require authentication:
 
 ```bash
-printf '' | termrouter provider add \\\\
-  --name local \\\\
-  --type openai-compatible \\\\
-  --base-url http://127.0.0.1:11434/v1 \\\\
+printf '' | termrouter provider add \
+  --name local \
+  --type openai-compatible \
+  --base-url http://127.0.0.1:11434/v1 \
   --api-key-stdin
 ```
 
-PowerShell:
-
-```powershell
-"" | termrouter provider add `
-  --name local `
-  --type openai-compatible `
-  --base-url http://127.0.0.1:11434/v1 `
-  --api-key-stdin
-```
-
-Create a fixed local alias:
+Then expose a local model:
 
 ```bash
-termrouter alias add local-chat \\\\
-  --provider local \\\\
+termrouter alias add local-chat \
+  --provider local \
   --model llama3.2
 ```
 
-### Manage provider state
+### Provider operations
 
 ```bash
 termrouter provider list
@@ -378,537 +495,878 @@ termrouter provider enable openai-main
 termrouter provider remove openai-main --yes
 ```
 
-\---
+Provider secrets are referenced, not stored in plaintext inside `config.yaml`.
 
-## Fixed aliases and fallback routes
+---
 
-### Direct alias
+## Unified routing workflow
 
-A direct alias always resolves to one configured provider and model:
+TermRouter supports three routing modes. All are exposed to clients through aliases.
+
+### Mode 1: Single Model
+
+Use one deterministic target:
 
 ```bash
-termrouter alias add coding \\\\
-  --provider openai-main \\\\
+termrouter alias add coding \
+  --provider openai-main \
   --model gpt-4o-mini
 ```
 
-### Ordered fallback route
+Best for:
 
-A fallback route tries eligible targets in order:
+- predictable workloads;
+- provider-specific evaluation;
+- strict operational control;
+- debugging without routing variability.
 
-```bash
-termrouter route add coding-route \\\\
-  --strategy fallback \\\\
-  --target openai-main:gpt-4o-mini \\\\
-  --target local:llama3.2
+### Mode 2: Fallback
 
-termrouter alias add coding --route coding-route
-```
-
-### Fallback behavior
-
-TermRouter may try the next target when a supported transient failure occurs before visible response content reaches the client. Typical eligible failures include transport errors, rate limits, provider overload, and transient server errors.
-
-TermRouter does not normally fall back for:
-
-* Invalid client requests
-* Router client-authentication failures
-* Mandatory unsupported features
-* Provider safety refusals
-* Explicit provider or policy restrictions
-
-> \\\[!IMPORTANT]
-> During streaming, fallback is permitted only before the first client-visible semantic content event. After streaming content begins, TermRouter never combines output from different models or providers.
-
-\---
-
-# Smart Routes
-
-Smart Routes allow one alias—such as `auto`—to select the most suitable configured model for each request.
-
-Instead of statically mapping `auto` to one model, TermRouter:
-
-1. Normalizes the incoming OpenAI or Anthropic request.
-2. Extracts task and capability requirements.
-3. Classifies the task using the configured local classifier.
-4. Filters candidates that violate hard requirements or policy constraints.
-5. Scores eligible candidates against their model profiles.
-6. Applies confidence and default-target behavior.
-7. Reuses a session-affinity selection when appropriate.
-8. Produces an ordered execution plan.
-9. Passes that plan to the existing retry and fallback engine.
-10. Stores a privacy-conscious decision record for later explanation.
-
-```text
-Client requests model="auto"
-          │
-          ▼
-Normalized request
-          │
-          ▼
-Task classification
-          │
-          ├─ simple / medium / complex
-          ├─ coding / reasoning / analysis / general
-          └─ tools / context / structured-output requirements
-          │
-          ▼
-Hard capability and policy filtering
-          │
-          ▼
-Candidate scoring
-          │
-          ├─ capability match
-          ├─ policy preference
-          ├─ reliability and health
-          ├─ cost tier
-          └─ latency tier
-          │
-          ▼
-Selected model and ordered fallback plan
-          │
-          ▼
-Existing TermRouter execution engine
-```
-
-Smart Routes do not generate the answer, run several models in parallel, judge model responses, or merge outputs. Smart Routes only decide which configured model should answer.
-
-## Smart Route concepts
-
-### Model profile
-
-A model profile describes a specific candidate's capabilities and properties, including reasoning, analysis, coding, tool use, structured output, context, cost, latency, and privacy characteristics.
-
-### Task profile
-
-A task profile describes the inferred request category, complexity, required capabilities, hard constraints, and classification confidence.
-
-### Candidate
-
-A candidate is a configured provider/model pair that the Smart Route may select.
-
-### Policy
-
-A policy controls the trade-off between task fit, quality, reliability, cost, latency, and privacy.
-
-### Shadow mode
-
-Shadow mode generates and stores a Smart Route recommendation but leaves real traffic on the existing route. Use shadow mode to evaluate classification and candidate distribution safely.
-
-### Session affinity
-
-Session affinity keeps related turns on the selected model unless requirements change, context limits are reached, the target becomes unavailable, or the affinity record expires.
-
-## Configure model profiles
-
-List profiles:
+Create an ordered route:
 
 ```bash
-termrouter model profile list
+termrouter route add coding-fallback \
+  --strategy fallback \
+  --target openai-main:gpt-4o-mini \
+  --target local:qwen-coder
+
+termrouter alias add coding --route coding-fallback
 ```
 
-Inspect a profile:
+Fallback is considered only for eligible transient failures before visible streaming content is committed.
+
+### Mode 3: Smart
+
+Create a task-aware candidate pool:
 
 ```bash
-termrouter model profile show local/qwen-coder
-```
-
-Set or override a profile:
-
-```bash
-termrouter model profile set local/qwen-coder \\\\
-  --general 3 \\\\
-  --coding 5 \\\\
-  --reasoning 4 \\\\
-  --analysis 3 \\\\
-  --tool-use 4 \\\\
-  --cost-tier 1 \\\\
-  --latency-tier 1
-```
-
-Validate a profile:
-
-```bash
-termrouter model profile validate local/qwen-coder
-```
-
-Reset user overrides:
-
-```bash
-termrouter model profile reset local/qwen-coder --yes
-```
-
-The exact profile flags available for a build can be inspected with:
-
-```bash
-termrouter model profile set --help
-```
-
-## Create a Smart Route
-
-```bash
-termrouter route add intelligent \\\\
-  --strategy smart \\\\
-  --candidate local:qwen-coder \\\\
-  --candidate compatible-main:general-model \\\\
-  --candidate anthropic-main:analytical-model \\\\
-  --candidate openai-main:reasoning-model \\\\
-  --policy balanced \\\\
+termrouter route add intelligent \
+  --strategy smart \
+  --candidate local:qwen-coder \
+  --candidate compatible-main:general-model \
+  --candidate anthropic-main:analytical-model \
+  --candidate openai-main:reasoning-model \
+  --policy balanced \
   --default anthropic-main:analytical-model
-```
 
-Expose the route through the alias `auto`:
-
-```bash
 termrouter alias add auto --route intelligent
 ```
 
-Clients can now request:
+Smart routes are created in shadow mode by default. Evaluate them before activating live control.
 
-```json
-{
-  "model": "auto",
-  "messages": \\\[
-    {
-      "role": "user",
-      "content": "Review this concurrent Go worker pool and identify the deadlock."
-    }
-  ]
-}
-```
+---
 
-## Smart policies
+## Smart Routes
 
-A Smart Route policy determines how the router ranks eligible candidates.
+Smart Routes analyze the request locally and choose among configured candidates.
 
-### Balanced
+### Task profile
 
-Prioritizes task suitability while considering quality, reliability, cost, and latency.
+The deterministic classifier extracts signals such as:
 
-```bash
---policy balanced
-```
+- task category;
+- simple, medium, or complex workload;
+- coding, reasoning, analysis, writing, extraction, translation, or tool-operation requirements;
+- tool-use, vision, structured-output, and context requirements;
+- estimated context size;
+- classification confidence.
 
-### Quality-oriented
+### Hard filtering
 
-Use the quality-oriented policy defined by the current configuration when task quality should dominate cost and latency.
+A high score cannot override a hard requirement. A candidate can be rejected for reasons such as:
 
-### Economy-oriented
+- provider disabled or unhealthy;
+- missing credential;
+- tool or vision support unavailable;
+- insufficient context or output capacity;
+- privacy policy mismatch;
+- strict profile unavailable;
+- direct policy restriction;
+- candidate below the configured minimum task match.
 
-Use the economy-oriented policy when reducing cost is important, while retaining the configured minimum suitability requirements.
+### Policy presets
 
-### Latency-oriented
+- `balanced` — task fit with quality, reliability, cost, and latency considered.
+- `quality` — prioritizes capability and output quality.
+- `economy` — favors lower-cost suitable candidates.
+- `fast` — emphasizes response latency.
+- `private` — favors or restricts selection to local/private targets.
 
-Use the latency-oriented policy when fast response is more important than maximum model capability.
-
-### Privacy-oriented
-
-Use a privacy-oriented policy to restrict selection to configured local or private targets.
-
-Run the CLI help or inspect the active configuration to see the exact policy names supported by the current build:
+Inspect supported values in the running build:
 
 ```bash
 termrouter route add --help
 termrouter config show
 ```
 
-## Test classification without routing a request
-
-```bash
-termrouter smart classify \\\\
-  --prompt "Review this concurrent Go function and identify race conditions"
-```
-
-This helps inspect the inferred category, complexity, requirements, and confidence before enabling live selection.
-
-## Explain a prompt-level decision
-
-```bash
-termrouter explain auto \\\\
-  --prompt "Review this concurrent Go function and identify race conditions"
-```
-
-The explanation can include:
-
-* Task category and complexity
-* Classification confidence
-* Required capabilities
-* Eligible candidates
-* Rejected candidates and reasons
-* Candidate scores
-* Selected target
-* Policy influence
-
-## Enable evaluation in shadow mode
+### Shadow mode
 
 ```bash
 termrouter route smart enable intelligent --shadow
 ```
 
-In shadow mode:
+Shadow mode classifies requests and stores recommendations without changing live traffic. It does not call extra candidate models simply to compare responses.
 
-* Smart classification runs locally.
-* TermRouter records the recommendation.
-* Existing real routing remains unchanged.
-* No additional candidate model is called merely for comparison.
-* Raw prompts are not required for the decision record.
-
-Inspect shadow results:
+Review behavior:
 
 ```bash
-termrouter smart report \\\\
-  --route intelligent \\\\
-  --last 7d
+termrouter smart status
+termrouter smart report --route intelligent --last 7d
+termrouter explain auto --prompt "Review this concurrent Go worker pool"
 ```
 
-## Enable live Smart Route selection
-
-The currently implemented live activation form is:
+### Live mode
 
 ```bash
 termrouter route smart enable intelligent --shadow=false
 ```
 
-> \\\[!CAUTION]
-> Live mode allows Smart Routes to control model selection. Evaluate the route in shadow mode first, verify model profiles, review candidate distribution, and confirm cost and privacy policies before switching to live mode.
+> [!CAUTION]
+> Validate model profiles, candidate distribution, privacy settings, pricing, and default behavior before enabling live Smart Route selection.
 
-## Inspect Smart Route status
+### Session affinity
 
-```bash
-termrouter smart status
-```
+Session affinity keeps related requests on the chosen provider/model and avoids unnecessary model switching. TermRouter may reconsider affinity when:
 
-Use this to inspect whether Smart Routes are disabled, running in shadow mode, or controlling live selection.
+- required capabilities change;
+- tool, image, or output requirements change;
+- context would exceed the selected model's capacity;
+- the provider becomes unhealthy;
+- route or policy configuration changes;
+- the affinity record expires.
 
-## Explain a completed request
+Session affinity influences selection only. Retry and fallback still operate on the immutable plan created for the current request.
 
-```bash
-termrouter explain --request req\\\_01JABC123
-```
+### Explainability
 
-A historical explanation can show:
-
-* Requested alias
-* Smart route and policy
-* Task classification
-* Selected target
-* Candidate ranking or rejection reasons
-* Session-affinity influence
-* Retry and fallback attempts
-* Whether fallback happened before stream commitment
-
-## Smart decision diagnostics
-
-OpenAI- and Anthropic-compatible responses may include TermRouter diagnostic headers describing the request ID, route, selected model, decision class, or confidence according to configured diagnostic behavior.
-
-Use the request ID with:
+Explain a hypothetical request:
 
 ```bash
-termrouter explain --request <request-id>
+termrouter explain auto \
+  --prompt "Compare three designs for a concurrent Go job scheduler"
 ```
 
-## Session affinity
+Explain a completed request:
 
-TermRouter persists Smart Route session-affinity state in SQLite. Affinity prevents unnecessary model changes during a multi-turn conversation.
+```bash
+termrouter explain --request req_01JABC123
+```
 
-A pinned selection may be reconsidered when:
+An explanation can include classification, confidence, candidate scores, rejection reasons, selected target, default use, session-affinity influence, and shadow recommendation.
 
-* Required capabilities change
-* Tool, image, or output requirements change
-* Context would exceed the selected model's limit
-* The selected target becomes unhealthy
-* The route or policy changes
-* The affinity record expires
-* The client explicitly causes a new routing context
+---
 
-Session affinity affects model selection only. Provider retry and fallback continue to use the execution plan produced for the request.
+## Model profiles
 
-## Recommended Smart Route rollout
+A model profile describes capabilities and operational properties used by Smart Routes.
 
-### Step 1: Validate profiles
+### Layered resolution
+
+Profiles are resolved per field using this precedence:
+
+```text
+User override
+    ↓
+Local assessment baseline
+    ↓
+Independent external-consensus baseline
+    ↓
+Built-in catalog
+```
+
+Higher layers override only the fields they define. Resetting a user override reveals the lower baseline rather than destroying it.
+
+### Capability dimensions
+
+Profiles can describe dimensions such as:
+
+- general capability;
+- coding;
+- reasoning;
+- analysis;
+- writing;
+- tool use;
+- instruction following;
+- structured output;
+- mathematics;
+- long context;
+- summarization;
+- information extraction;
+- multilingual behavior.
+
+### Operational properties
+
+- vision;
+- tool support;
+- parallel tools;
+- structured output;
+- streaming;
+- context window;
+- maximum output tokens;
+- cost tier;
+- latency tier;
+- privacy classification.
+
+### Profile commands
 
 ```bash
 termrouter model profile list
+termrouter model profile show local/qwen-coder
+
+termrouter model profile set local/qwen-coder \
+  --general 7 \
+  --coding 9 \
+  --reasoning 8 \
+  --analysis 7 \
+  --tool-use 8 \
+  --cost-tier 1 \
+  --latency-tier 1 \
+  --privacy local
+
 termrouter model profile validate local/qwen-coder
+termrouter model profile reset local/qwen-coder --yes
 ```
 
-### Step 2: Test representative prompts
+---
+
+## Independent benchmark consensus
+
+TermRouter can build reviewable profile proposals from independent benchmark evidence before relying on local self-assessment or manual configuration.
+
+### Evidence principles
+
+The pipeline is designed around:
+
+- approved and curated source identities;
+- deterministic extraction where possible;
+- bounded live web retrieval;
+- caching and deduplication;
+- benchmark-family and per-source contribution caps;
+- model identity and variant matching;
+- provenance retention;
+- confidence bands;
+- review before application.
+
+### Variant matching
+
+Evidence is classified by identity compatibility:
+
+- **Exact:** same creator, family, version, and applicable release identity. Full contribution.
+- **Strong probable:** likely the same model with a preview/stable, quantization, context-mode, or harness difference. Reduced contribution and mandatory review.
+- **Family only:** same family but insufficient version identity. Excluded from scoring.
+- **Incompatible:** different creator/family or materially different model variant. Excluded.
+
+A proposal marked `mandatory_review` cannot be applied programmatically until reviewed and cleared through the supported review workflow.
+
+### CLI workflow
+
+Inspect the registry:
 
 ```bash
-termrouter smart classify --prompt "Summarize this paragraph"
-termrouter smart classify --prompt "Debug this concurrent Go service"
-termrouter smart classify --prompt "Compare three architecture options"
+termrouter model profile external registry
 ```
 
-### Step 3: Inspect route explanations
+Search for evidence:
 
 ```bash
-termrouter explain auto --prompt "Debug this concurrent Go service"
+termrouter model profile external search openai/example-model
 ```
 
-### Step 4: Enable shadow mode
+Create a reviewable proposal:
 
 ```bash
-termrouter route smart enable intelligent --shadow
+termrouter model profile external proposal openai/example-model
 ```
 
-### Step 5: Review aggregate behavior
+List proposals:
 
 ```bash
-termrouter smart report --route intelligent --last 7d
+termrouter model profile external list-proposals --status pending
 ```
 
-### Step 6: Enable live mode
+Apply an eligible proposal:
 
 ```bash
-termrouter route smart enable intelligent --shadow=false
+termrouter model profile external apply <proposal-id>
 ```
 
-### Step 7: Monitor decisions
+Inspect import history:
 
 ```bash
-termrouter smart status
-termrouter logs
-termrouter explain --request <request-id>
+termrouter model profile external history
 ```
 
-\---
+> [!NOTE]
+> External evidence supplies a baseline, not an unquestionable truth. User overrides and accepted local assessments retain higher precedence.
 
-## Point clients at TermRouter
+---
+
+## Local model assessment
+
+When independent evidence is unavailable or deployment-specific behavior must be measured, TermRouter can run a local assessment against a configured provider/model.
+
+### Assessment depths
+
+- `quick` — core categories and lower budget;
+- `standard` — broader capability coverage;
+- `comprehensive` — widest configured benchmark set and highest budget.
+
+TermRouter performs provider/model preflight checks, estimates request and token usage, uses configured pricing when available, persists progress, and generates a reviewable profile proposal.
+
+Run an assessment:
+
+```bash
+termrouter model profile assess run local/qwen-coder \
+  --depth standard
+```
+
+Limit categories when needed:
+
+```bash
+termrouter model profile assess run local/qwen-coder \
+  --depth standard \
+  --categories coding,reasoning,structured_output
+```
+
+Inspect, apply, cancel, or view history:
+
+```bash
+termrouter model profile assess show <assessment-id>
+termrouter model profile assess apply <assessment-id>
+termrouter model profile assess cancel <assessment-id>
+termrouter model profile assess history local/qwen-coder
+```
+
+Assessment results are written to the assessment baseline. Existing user overrides are preserved by layered resolution.
+
+---
+
+## Client keys and policy controls
+
+TermRouter client keys authenticate applications to the router. They are different from provider credentials.
+
+```text
+Router client key   → client authenticates to TermRouter
+Provider credential → TermRouter authenticates to an upstream provider
+```
+
+### Create a local key
+
+```bash
+termrouter key create --name local-agent
+```
+
+### Create a restricted portable key
+
+```bash
+termrouter key create \
+  --name portable-agents \
+  --portable \
+  --alias coding \
+  --alias auto \
+  --rpm 30 \
+  --max-concurrent 4 \
+  --daily-requests 500 \
+  --daily-input-tokens 3000000 \
+  --daily-output-tokens 500000 \
+  --daily-cost-usd 10 \
+  --max-output-tokens 8192 \
+  --max-request-body 10485760
+```
+
+### Available policy controls
+
+- allowed aliases;
+- direct-model enablement and exact model allowlists;
+- requests per minute;
+- maximum concurrent requests;
+- daily request quota;
+- daily input-token quota;
+- daily output-token quota;
+- daily estimated-spend budget;
+- per-request output-token cap;
+- per-key request-body cap;
+- optional expiration;
+- portable/shared-key marker.
+
+In public-hosting mode, portable keys are rejected unless mandatory restrictions are present, unless the operator deliberately supplies the explicit unsafe override.
+
+### Manage keys
+
+```bash
+termrouter key list
+termrouter key rotate <key-id>
+termrouter key set-policy <key-id> --rpm 20 --daily-cost-usd 5
+termrouter key disable <key-id>
+termrouter key remove <key-id> --yes
+```
+
+> [!WARNING]
+> A shared portable key creates shared impact: compromise affects all devices, attribution becomes weaker, and rotation must update every client. Prefer separate device or application keys where practical.
+
+---
+
+## Connect applications
 
 ### OpenAI-compatible clients
 
 Linux or macOS:
 
 ```bash
-export OPENAI\\\_BASE\\\_URL=http://127.0.0.1:8787/v1
-export OPENAI\\\_API\\\_KEY=tr\\\_live\\\_<your-router-client-key>
+export OPENAI_BASE_URL=http://127.0.0.1:8787/v1
+export OPENAI_API_KEY="$TERMROUTER_API_KEY"
 export MODEL=auto
 ```
 
 PowerShell:
 
 ```powershell
-$env:OPENAI\\\_BASE\\\_URL = "http://127.0.0.1:8787/v1"
-$env:OPENAI\\\_API\\\_KEY = "tr\\\_live\\\_<your-router-client-key>"
+$env:OPENAI_BASE_URL = "http://127.0.0.1:8787/v1"
+$env:OPENAI_API_KEY = $env:TERMROUTER_API_KEY
 $env:MODEL = "auto"
 ```
-
-Use `coding` for a deterministic alias or `auto` for a Smart Route alias.
 
 ### Anthropic-compatible clients
 
 Linux or macOS:
 
 ```bash
-export ANTHROPIC\\\_BASE\\\_URL=http://127.0.0.1:8787
-export ANTHROPIC\\\_API\\\_KEY=tr\\\_live\\\_<your-router-client-key>
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8787
+export ANTHROPIC_API_KEY="$TERMROUTER_API_KEY"
 ```
 
 PowerShell:
 
 ```powershell
-$env:ANTHROPIC\\\_BASE\\\_URL = "http://127.0.0.1:8787"
-$env:ANTHROPIC\\\_API\\\_KEY = "tr\\\_live\\\_<your-router-client-key>"
+$env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8787"
+$env:ANTHROPIC_API_KEY = $env:TERMROUTER_API_KEY
 ```
 
-Use a configured TermRouter alias as the requested model.
+Use an alias such as `coding` for deterministic routing or `auto` for Smart Routes.
 
-### Router key versus provider key
-
-These credentials are intentionally different:
-
-* **Router client key:** authenticates an application to TermRouter and begins with `tr\\\_live\\\_`.
-* **Provider credential:** authenticates TermRouter to OpenAI, Anthropic, or another upstream provider.
-
-Never put a provider credential in the client application when the application is connecting through TermRouter.
-
-\---
-
-## How TermRouter works
-
-### Fixed route request
-
-```text
-1. Client authenticates with a TermRouter client key.
-2. TermRouter parses and normalizes the inbound protocol.
-3. The requested alias resolves to a direct or fallback route.
-4. TermRouter checks provider, credential, capability, and health eligibility.
-5. The execution engine sends the request to the selected target.
-6. Retry or fallback runs when an eligible pre-commit failure occurs.
-7. The response is normalized into the client's expected protocol.
-8. Metadata is recorded without prompt bodies by default.
-```
-
-### Smart route request
-
-```text
-1. Client requests a Smart Route alias such as auto.
-2. TermRouter normalizes the request.
-3. The Smart classifier creates a task profile.
-4. Hard capability and policy constraints remove ineligible candidates.
-5. Eligible candidates are scored using model profiles and route policy.
-6. Confidence and session affinity influence the final selection.
-7. Smart Routes produce an immutable ordered execution plan.
-8. The existing execution engine performs retry and fallback.
-9. The response is returned using the inbound protocol.
-10. The Smart Decision is stored for status, reporting, and explanation.
-```
-
-### Architecture boundaries
-
-|Area|Responsibility|
-|-|-|
-|Configuration|Providers, routes, candidates, `smart.\\\*`, aliases, and model profiles|
-|Router|Resolve direct, fallback, and Smart Route aliases|
-|Smart selection|Classify tasks, filter candidates, score models, and produce a plan|
-|Gateway|Apply selection before upstream execution|
-|Protocol adapters|Normalize OpenAI and Anthropic requests and responses|
-|Execution|Apply existing retry, cooldown, circuit, fallback, and stream behavior|
-|Credentials|Resolve upstream secrets only after target selection|
-|SQLite|Persist keys, health, usage, Smart Decisions, and session affinity|
-|Observability|Logs, usage, diagnostic headers, status, reports, and explanations|
-
-\---
+---
 
 ## API compatibility
 
-|Method|Path|Authentication|Purpose|
-|-|-|-:|-|
-|`GET`|`/health`|No|Process liveness|
-|`GET`|`/ready`|No|Configuration and storage readiness|
-|`GET`|`/v1/models`|Yes|List public model aliases|
-|`POST`|`/v1/chat/completions`|Yes|OpenAI Chat Completions with optional SSE|
-|`POST`|`/v1/messages`|Yes|Anthropic Messages with optional SSE|
-
-### Client authentication
+| Method | Path | Authentication | Purpose |
+|---|---|---:|---|
+| `GET` | `/health` | No | Minimal liveness response |
+| `GET` | `/ready` | No/local policy | Storage and runtime readiness |
+| `GET` | `/v1/models` | Yes | List public aliases |
+| `POST` | `/v1/chat/completions` | Yes | OpenAI Chat Completions |
+| `POST` | `/v1/messages` | Yes | Anthropic Messages |
 
 OpenAI-style authentication:
 
 ```http
-Authorization: Bearer tr\\\_live\\\_<your-router-client-key>
+Authorization: Bearer tr_live_...
 ```
 
 Anthropic-style authentication:
 
 ```http
-x-api-key: tr\\\_live\\\_<your-router-client-key>
+x-api-key: tr_live_...
 ```
 
-Provider credentials are not forwarded from clients. TermRouter resolves the selected upstream credential internally.
+TermRouter intentionally focuses on a practical compatibility subset. Provider-specific fields may not be portable unless they are explicitly represented by the internal normalization layer.
 
-\---
+---
+
+## Streaming and fallback guarantees
+
+Streaming safety is a core invariant.
+
+### Before commitment
+
+TermRouter may try the next eligible target when a retryable failure occurs before client-visible semantic content is sent. Examples can include:
+
+- transport failure;
+- rate limit;
+- provider overload;
+- transient upstream server error;
+- timeout before committed content.
+
+### After commitment
+
+Once text or a tool-call start becomes visible to the client:
+
+- TermRouter does not switch providers;
+- TermRouter does not splice a second model's output into the stream;
+- TermRouter does not merge responses from multiple models;
+- a later upstream error is returned as an error for the current stream.
+
+TermRouter does not normally fall back for invalid client requests, authentication failures, unsupported mandatory features, explicit provider restrictions, or non-retryable policy refusal.
+
+---
+
+## TermRouter Console
+
+The optional Console provides browser-based configuration and diagnostics while preserving the terminal-first architecture.
+
+```bash
+termrouter console
+```
+
+Default address:
+
+```text
+http://127.0.0.1:8788
+```
+
+The CLI prints a one-time bootstrap login URL. The Console can start the gateway in the same process when it is not already running.
+
+### Console capabilities
+
+- guided initial setup;
+- provider and model configuration;
+- unified Single, Fallback, and Smart routing workflow;
+- model profile inspection and editing;
+- independent benchmark proposal review;
+- local assessment workflow;
+- client-key management and policy limits;
+- activity and token-usage views;
+- Smart Route shadow reporting;
+- request playground and route explanation;
+- diagnostics and provider-health views;
+- configuration history, diff, and rollback.
+
+### Console security boundary
+
+- loopback only;
+- separate port from inference traffic;
+- not exposed by the included public reverse-proxy configuration;
+- provider secrets are not returned to the browser;
+- bootstrap access is one-time and local;
+- public configuration is rejected by validation.
+
+Manage the process:
+
+```bash
+termrouter console status
+termrouter console stop
+```
+
+For remote administration, use an SSH tunnel from a trusted device:
+
+```bash
+ssh -L 8788:127.0.0.1:8788 user@your-server
+```
+
+Then open `http://127.0.0.1:8788` locally.
+
+---
+
+## Public VPS deployment
+
+TermRouter itself has no native TLS termination in the current implementation. A public deployment must keep TermRouter on loopback and place an authenticated TLS reverse proxy at the network edge.
+
+```text
+Remote client
+    │ HTTPS :443
+    ▼
+Caddy or equivalent
+    │ HTTP over loopback only
+    ▼
+TermRouter 127.0.0.1:8787
+
+Console 127.0.0.1:8788 → never publicly proxied
+```
+
+Included deployment assets:
+
+```text
+deploy/Caddyfile
+deploy/setup-vps.sh
+deploy/termrouter.service
+docs/vps-deployment.md
+```
+
+### VPS setup
+
+Build or copy the binary, then run:
+
+```bash
+sudo TERMROUTER_BIN_SRC=./termrouter bash deploy/setup-vps.sh
+```
+
+The helper creates a dedicated service user, stable directories, a sandboxed systemd unit, and recommended UFW rules. It does not automatically enable the firewall or invent domains, credentials, or budgets.
+
+Start the service:
+
+```bash
+sudo systemctl enable --now termrouter
+sudo systemctl status termrouter
+```
+
+Confirm that backend ports remain loopback-only:
+
+```bash
+sudo ss -ltnp | grep -E ':8787|:8788'
+```
+
+### Reverse proxy boundary
+
+The supplied Caddy design should expose only approved inference paths. Do not proxy `/admin/v1/*`, the Console, arbitrary root paths, or internal diagnostics not intended for external use.
+
+### Firewall boundary
+
+Allow SSH first, then HTTP/HTTPS for certificate issuance and inference:
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+sudo ufw enable
+```
+
+Do not open ports `8787` or `8788` publicly.
+
+> [!IMPORTANT]
+> Use TermRouter only on devices and networks where it is authorized. It is not intended to bypass organizational controls or security policy.
+
+---
+
+## Security model
+
+### Local-first network boundary
+
+The safe default is `127.0.0.1:8787`. Non-loopback operation requires explicit configuration, and public-hosting mode validates that the backend remains on loopback behind a TLS reverse proxy.
+
+### Client-key storage
+
+- plaintext shown once;
+- non-secret prefix stored for candidate lookup;
+- Argon2id hash and salt stored for verification;
+- disabled and expired keys are rejected;
+- invalid-auth attempts are throttled before expensive verification;
+- key rotation replaces the stored verifier.
+
+### Provider credential isolation
+
+Supported references:
+
+```text
+env://NAME       environment variable
+vault://NAME     encrypted local vault
+keyring://NAME   operating-system credential store
+none://          explicitly no credential for local endpoints
+```
+
+Provider credentials are resolved only after routing chooses an upstream target. They are never supplied by or returned to the client application.
+
+### Request admission
+
+The effective middleware order is designed to reject unsafe or unauthorized requests before provider execution:
+
+```text
+Request ID
+→ panic recovery
+→ trusted-proxy processing
+→ global body limit
+→ client authentication
+→ per-key body limit
+→ global concurrency
+→ per-key rate/concurrency/quota policy
+→ endpoint handler
+```
+
+### Financial protection
+
+For spend-enforced keys:
+
+- pricing must be configured for the resolved provider/model;
+- unpriced routes fail closed;
+- quota-store failure fails closed for portable/public usage;
+- usage is attributed to the client key and resolved provider/model;
+- reservation logic prevents concurrent requests from silently overspending a shared budget.
+
+### Direct-model protection
+
+Alias authorization and direct provider/model authorization are separate. A key allowed to use alias `coding` cannot automatically bypass that restriction by requesting `provider/model` directly.
+
+### Logging and redaction
+
+- metadata-only logging is the default;
+- authorization and API-key patterns are redacted;
+- raw prompts are not needed for Smart Decision persistence;
+- sanitized configuration export removes credential targets;
+- evidence retrieval and profile proposals retain provenance without exposing provider credentials.
+
+### External evidence security
+
+The external benchmark pipeline uses URL validation, restricted-address checks, approved hosts, redirect limits, content-type and size limits, cache controls, and mandatory review for uncertain model identity.
+
+---
+
+## Configuration
+
+Default home directory:
+
+```text
+~/.termrouter/
+├── config.yaml    # human-editable configuration, no plaintext provider secrets
+├── router.db      # keys, usage, health, decisions, assessments, history
+├── vault.db       # encrypted credentials when vault backend is selected
+├── logs/
+└── run/
+    ├── termrouter.pid
+    └── console.pid
+```
+
+Select a different home:
+
+```bash
+export TERMROUTER_HOME=/tmp/termrouter-demo
+termrouter init --backend vault --create-key
+```
+
+Or per command:
+
+```bash
+termrouter --home /custom/path status
+```
+
+### Main configuration sections
+
+```yaml
+server:
+  host: 127.0.0.1
+  port: 8787
+  auth_required: true
+  request_timeout: 180s
+  max_request_size: 20MiB
+  max_concurrency: 64
+  max_messages: 200
+  max_tools: 64
+
+credentials:
+  backend: vault
+
+providers: {}
+routes: {}
+aliases: {}
+model_profiles: {}
+pricing: {}
+
+logging:
+  level: info
+  payloads: metadata-only
+  retention_days: 14
+```
+
+### Pricing example
+
+Pricing is expressed in USD per one million tokens and can be defined per exact provider/model or provider fallback.
+
+```yaml
+pricing:
+  openai/gpt-example:
+    input_usd_per_million: 1.00
+    output_usd_per_million: 4.00
+    currency: usd
+
+  local/qwen-coder:
+    input_usd_per_million: 0
+    output_usd_per_million: 0
+    currency: usd
+```
+
+Do not copy example rates as current provider pricing. Configure values from your own provider agreement.
+
+### Validate and export
+
+```bash
+termrouter config path
+termrouter config check
+termrouter config show
+termrouter config export
+```
+
+Configuration writes are atomic and use restrictive permissions.
+
+---
+
+## Observability and diagnostics
+
+### Health and readiness
+
+```bash
+curl http://127.0.0.1:8787/health
+curl http://127.0.0.1:8787/ready
+```
+
+In public-hosting mode, readiness exposure can be disabled to avoid publishing storage or dependency status.
+
+### Runtime status
+
+```bash
+termrouter status
+termrouter smart status
+```
+
+### Doctor
+
+```bash
+termrouter doctor
+```
+
+Doctor checks configuration, database availability, authentication posture, public-hosting constraints, portable-key controls, and required directories.
+
+### Request logs
+
+```bash
+termrouter logs
+termrouter logs --errors
+termrouter logs --request req_01JABC123
+```
+
+Recorded metadata can include:
+
+- request ID;
+- client key label;
+- inbound protocol;
+- requested alias;
+- selected provider and upstream model;
+- attempt and fallback reason;
+- latency and time to first token;
+- input and output tokens;
+- status and error class;
+- stream indicator.
+
+### Usage
+
+```bash
+termrouter usage today
+termrouter usage summary
+```
+
+### Smart analysis
+
+```bash
+termrouter smart classify \
+  --prompt "Review this concurrent Go function"
+
+termrouter smart report \
+  --route intelligent \
+  --last 7d
+
+termrouter explain --request req_01JABC123
+```
+
+---
 
 ## CLI reference
 
-Use command-level help to see the exact flags supported by the current build:
+Use command help as the final authority for flags supported by the current build:
 
 ```bash
 termrouter --help
 termrouter <command> --help
 ```
 
-### Initialization and lifecycle
+### Lifecycle
 
 ```bash
 termrouter init
@@ -919,7 +1377,7 @@ termrouter doctor
 termrouter version
 ```
 
-### Provider management
+### Providers
 
 ```bash
 termrouter provider add
@@ -928,282 +1386,222 @@ termrouter provider show <name>
 termrouter provider test <name>
 termrouter provider enable <name>
 termrouter provider disable <name>
-termrouter provider remove <name>
+termrouter provider remove <name> --yes
 ```
 
-### Alias and route management
+### Aliases and routes
 
 ```bash
 termrouter alias add
 termrouter alias list
 termrouter alias show <name>
-termrouter alias remove <name>
+termrouter alias remove <name> --yes
 
 termrouter route add
 termrouter route list
 termrouter route show <name>
-termrouter route remove <name>
+termrouter route remove <name> --yes
+termrouter route smart enable <name> --shadow
+termrouter route smart enable <name> --shadow=false
+termrouter route smart disable <name>
+termrouter route smart validate <name>
 ```
 
-### Smart Route and profile management
+### Smart routing
+
+```bash
+termrouter smart classify --prompt "..."
+termrouter smart report --route <route> --last 7d
+termrouter smart status
+termrouter explain <alias> --prompt "..."
+termrouter explain --request <request-id>
+```
+
+### Model profiles
 
 ```bash
 termrouter model profile list
 termrouter model profile show <provider/model>
-termrouter model profile set <provider/model>
-termrouter model profile reset <provider/model>
+termrouter model profile set <provider/model> [flags]
 termrouter model profile validate <provider/model>
-
-termrouter route add intelligent --strategy smart --candidate ... --policy balanced --default ...
-termrouter route smart enable intelligent --shadow
-termrouter route smart enable intelligent --shadow=false
-
-termrouter explain auto --prompt "..."
-termrouter explain --request req\\\_...
-termrouter smart classify --prompt "..."
-termrouter smart report --route intelligent --last 7d
-termrouter smart status
+termrouter model profile reset <provider/model> --yes
 ```
 
-### Router client keys
+### External consensus
+
+```bash
+termrouter model profile external registry
+termrouter model profile external search <provider/model>
+termrouter model profile external proposal <provider/model>
+termrouter model profile external list-proposals
+termrouter model profile external apply <proposal-id>
+termrouter model profile external history
+```
+
+### Assessment
+
+```bash
+termrouter model profile assess run <provider/model>
+termrouter model profile assess show <assessment-id>
+termrouter model profile assess apply <assessment-id>
+termrouter model profile assess cancel <assessment-id>
+termrouter model profile assess history <provider/model>
+```
+
+### Keys
 
 ```bash
 termrouter key create
 termrouter key list
-termrouter key rotate <name>
-termrouter key disable <name>
-termrouter key remove <name>
+termrouter key set-policy <key-id>
+termrouter key rotate <key-id>
+termrouter key disable <key-id>
+termrouter key remove <key-id> --yes
 ```
 
-### Logs and usage
+### Console, logs, usage, and config
 
 ```bash
+termrouter console
+termrouter console status
+termrouter console stop
 termrouter logs
 termrouter usage today
 termrouter usage summary
-```
-
-### Configuration
-
-```bash
 termrouter config path
 termrouter config show
 termrouter config check
 termrouter config export
 ```
 
-### Live request testing
+### Live request test
 
 ```bash
-termrouter test <alias>
+export TERMROUTER_TEST_KEY='tr_live_...'
+termrouter test coding --prompt "Reply with pong"
+termrouter test coding --stream
 ```
-
-The live test command requires the running server and the configured test-key mechanism, such as `TERMROUTER\\\_TEST\\\_KEY`, according to the active build.
 
 ### Global flags
 
 ```text
---home <path>    Use a custom TermRouter home directory
---json           Produce machine-readable output where supported
+--home <path>  use a custom TermRouter home directory
+--json         produce machine-readable output where supported
 ```
 
-Destructive commands require `--yes` when used non-interactively.
+---
 
-### Isolated development home
+## Development and testing
 
-Linux or macOS:
+### Standard checks
 
 ```bash
-export TERMROUTER\\\_HOME=/tmp/termrouter-demo
-termrouter init --backend vault --create-key
+go fmt ./...
+go vet ./...
+go test ./...
+go test -race ./...
+go build -trimpath -o bin/termrouter ./cmd/termrouter
 ```
 
-PowerShell:
+### Important test areas
 
-```powershell
-$env:TERMROUTER\\\_HOME = "$env:TEMP\\\\termrouter-demo"
-termrouter init --backend vault --create-key
+The repository includes tests for:
+
+- configuration validation and migration;
+- direct, fallback, and Smart Route resolution;
+- provider adapters and normalization;
+- authentication, key expiration, and prefix lookup;
+- portable-key restrictions;
+- direct-model authorization bypass prevention;
+- global and per-key concurrency;
+- token, request, and spend quotas;
+- fail-closed quota-store behavior;
+- request-body limits with known and unknown lengths;
+- request ID validation;
+- streaming commitment and fallback behavior;
+- secret redaction and sanitized exports;
+- profile-layer precedence;
+- assessment persistence and application;
+- external proposal mandatory-review persistence;
+- schema migrations;
+- SSRF and evidence-pipeline restrictions;
+- Console/API policy parity.
+
+### Development home
+
+Keep local experiments isolated:
+
+```bash
+export TERMROUTER_HOME=/tmp/termrouter-dev
+export TERMROUTER_VAULT_PASSPHRASE='development-only-secret'
+
+./bin/termrouter init --backend vault --create-key
+./bin/termrouter serve
 ```
 
-\---
+### Architecture decisions
 
-## Configuration and storage
-
-The default TermRouter home directory is `\\\~/.termrouter`:
+Durable decisions belong under:
 
 ```text
-\\\~/.termrouter/
-├── config.yaml    # Human-editable configuration; no plaintext provider secrets
-├── router.db      # SQLite state, hashes, health, usage, and Smart Route records
-├── vault.db       # Encrypted provider credentials when using the vault backend
-├── logs/          # Structured local logs
-└── run/           # Runtime state, including the PID file
+docs/adr/
 ```
 
-### Main configuration concepts
+Add ADRs for changes to protocol normalization, credentials, streaming commitment, routing classification, profile precedence, persistence, security defaults, or public deployment behavior.
+
+---
+
+## Project layout
 
 ```text
-server            Listener, authentication, limits, and remote-binding behavior
-providers         Upstream provider connections
-aliases           Public model names requested by clients
-routes            Direct, fallback, and smart route definitions
-model\\\_profiles    Model capabilities and operational properties
-smart.\\\*           Classification, policy, confidence, affinity, and decision settings
-logging           Log level, payload behavior, and retention
+TerminalRouter/
+├── cmd/termrouter/           CLI entrypoint
+├── internal/
+│   ├── api/                  OpenAI, Anthropic, middleware, admin APIs
+│   ├── app/                  server composition and runtime lifecycle
+│   ├── cli/                  Cobra commands
+│   ├── config/               YAML schema, validation, paths, pricing
+│   ├── console/              local Web Console backend and embedded assets
+│   ├── credentials/          env, keyring, and encrypted vault
+│   ├── execution/            retry, fallback, policy and accounting
+│   ├── normalization/        provider-neutral messages and stream events
+│   ├── observability/        structured logging and redaction
+│   ├── provider/             provider contracts and adapters
+│   ├── router/               alias and execution-plan resolution
+│   ├── smart/                classification, profiles, selection, assessment
+│   └── storage/              SQLite schema, migrations, and persistence
+├── web/                      React/TypeScript/Tailwind/Vite Console source
+├── deploy/                   Caddy, systemd, VPS setup
+├── docs/
+│   ├── adr/                  architecture decision records
+│   └── vps-deployment.md
+├── Makefile
+├── go.mod
+├── go.sum
+├── LICENSE
+└── README.md
 ```
 
-Inspect and validate configuration:
+---
 
-```bash
-termrouter config path
-termrouter config check
-termrouter config show
-```
+## Current limits
 
-Export a sanitized configuration:
+TermRouter is designed for local development and trusted self-hosted environments. Current limitations include:
 
-```bash
-termrouter config export
-```
+- no native TLS termination;
+- no native Gemini-compatible endpoint;
+- no embeddings, image-generation, audio, or video routing;
+- no distributed or multi-node control plane;
+- SQLite-oriented single-instance state;
+- Smart Routes rely on configured profiles and local classification rather than learned end-to-end routing;
+- direct latent/vector communication between models is not part of the current gateway;
+- compatibility focuses on supported OpenAI and Anthropic request subsets rather than every provider-specific extension.
 
-\---
-
-## Security model
-
-### Local-first listener
-
-TermRouter listens on `127.0.0.1:8787` by default. Non-loopback binding requires explicit insecure-remote configuration because native TLS is not currently included.
-
-### Client keys
-
-* Router client keys begin with `tr\\\_live\\\_`.
-* Plaintext is shown only during creation or rotation.
-* TermRouter stores Argon2id hashes, not plaintext client keys.
-* Client keys can be listed, rotated, disabled, and removed independently.
-
-### Provider credentials
-
-Provider secrets are referenced rather than embedded in `config.yaml`:
-
-```text
-env://       Environment variable
-vault://     Encrypted local vault
-keyring://   Operating-system credential store
-```
-
-Vault credential material is protected with ChaCha20-Poly1305.
-
-### Routing and secret isolation
-
-Provider credentials are resolved only after TermRouter selects an upstream target. Client applications authenticate to TermRouter with router keys, not provider keys.
-
-### Logging privacy
-
-* Metadata-only logging is the default.
-* Authorization headers and configured secret fields are redacted.
-* Raw prompt and response bodies are not required for Smart Decisions.
-* Configuration export sanitizes credential references.
-* Smart classification and decision metadata can be recorded without retaining raw prompts.
-
-### Smart Route policy enforcement
-
-Smart scoring cannot override:
-
-* Client-key permissions
-* Provider disablement
-* Missing credentials
-* Hard capability requirements
-* Privacy restrictions
-* Cost ceilings
-* Provider health and circuit state
-
-### Safe remote access
-
-Prefer an encrypted tunnel instead of exposing TermRouter directly:
-
-```bash
-ssh -L 8787:127.0.0.1:8787 user@your-server
-```
-
-Then continue using:
-
-```text
-http://127.0.0.1:8787
-```
-
-Tailscale, WireGuard, or an authenticated TLS reverse proxy are also suitable deployment patterns.
-
-\---
-
-## Observability
-
-### Health
-
-```bash
-curl http://127.0.0.1:8787/health
-curl http://127.0.0.1:8787/ready
-```
-
-### Status
-
-```bash
-termrouter status
-termrouter smart status
-```
-
-### Provider diagnostics
-
-```bash
-termrouter provider test <provider-name>
-termrouter doctor
-```
-
-### Logs
-
-```bash
-termrouter logs
-```
-
-Logs can include metadata such as:
-
-```text
-request ID
-requested alias
-resolved route
-selected provider and model
-attempt number
-fallback reason
-latency
-input and output token usage
-Smart Route category and confidence
-session-affinity result
-error classification
-```
-
-### Usage
-
-```bash
-termrouter usage today
-termrouter usage summary
-```
-
-### Smart Route reports
-
-```bash
-termrouter smart report --route intelligent --last 7d
-```
-
-### Decision investigation
-
-```bash
-termrouter explain --request req\\\_...
-```
-
-\---
+---
 
 ## Troubleshooting
 
-### Run the diagnostic sequence
+### Recommended diagnostic sequence
 
 ```bash
 termrouter config check
@@ -1214,102 +1612,74 @@ termrouter smart status
 
 ### `401` from TermRouter
 
-The router client key is missing, malformed, disabled, or incorrect.
-
-Use a key created by:
+The client key is missing, malformed, expired, disabled, or incorrect.
 
 ```bash
-termrouter key create
+termrouter key list
 ```
 
-Do not use an OpenAI, Anthropic, or other upstream provider key as the TermRouter client key.
+Use a `tr_live_...` TermRouter key, not a provider API key.
 
 ### Provider authentication failure
 
-Confirm that the configured environment variable, vault entry, or keyring item is available to the process running `termrouter serve`.
-
-Then test the provider directly:
+Verify that the environment variable, vault entry, or keyring item is visible to the TermRouter process:
 
 ```bash
-termrouter provider test <provider-name>
+termrouter provider test <provider>
 ```
 
-### Unknown model or alias
+For systemd, confirm the service receives the expected environment or supported vault unlock mechanism.
 
-Inspect aliases and routes:
+### Unknown model or alias
 
 ```bash
 termrouter alias list
 termrouter route list
-termrouter route show <route-name>
+termrouter route show <route>
 ```
 
 ### No eligible Smart Route candidate
 
-Inspect classification and route reasoning:
-
 ```bash
-termrouter explain auto --prompt "<representative prompt>"
+termrouter explain auto --prompt "your representative request"
 termrouter model profile list
 termrouter smart status
 ```
 
-Common reasons include:
+Typical causes:
 
-* Missing or invalid model profile
-* Tool requirement unsupported by every candidate
-* Context requirement larger than every candidate limit
-* Provider disabled or unhealthy
-* Missing credential
-* Candidate blocked by privacy or cost policy
-* Candidate below the minimum suitability threshold
+- missing or invalid profile;
+- every candidate lacks a mandatory capability;
+- insufficient context capacity;
+- provider disabled, unhealthy, or missing credentials;
+- privacy or cost policy exclusion;
+- candidate below the minimum match;
+- low-confidence decision without an explicit default.
 
-### Unexpected Smart Route model
-
-Use:
+### Unexpected Smart Route selection
 
 ```bash
 termrouter explain --request <request-id>
 ```
 
-Check:
+Inspect classification, confidence, profile values, policy weights, health, affinity, and rejection reasons.
 
-* Task classification
-* Confidence
-* Session-affinity reuse
-* Candidate capability profiles
-* Policy weights or constraints
-* Provider health
-* Rejection reasons
+### Smart Route does not affect traffic
 
-If a model profile does not reflect a local deployment, override and validate the profile:
-
-```bash
-termrouter model profile set <provider/model> \\\[flags]
-termrouter model profile validate <provider/model>
-```
-
-### Smart Route is not changing traffic
-
-The route may be running in shadow mode.
+It may still be in shadow mode:
 
 ```bash
 termrouter smart status
+termrouter route smart enable <route> --shadow=false
 ```
 
-Live activation in the current CLI is:
+### Models switch between turns
 
-```bash
-termrouter route smart enable intelligent --shadow=false
-```
-
-### Smart Route is switching models between turns
-
-Check whether the client supplies a stable conversation identity and whether session affinity remains active. Also verify whether capability requirements, context size, provider health, route configuration, or affinity TTL caused reclassification.
+Check whether the client supplies a stable conversation identity and whether affinity remains valid. Capability changes, context growth, provider health, route edits, or TTL expiry can trigger reconsideration.
 
 ### Local provider connection refused
 
-Confirm that the local model server is running and that the base URL includes the correct OpenAI-compatible path, commonly `/v1`.
+Confirm that the local service is running and the base URL includes the correct compatibility prefix, commonly `/v1`.
 
 ```bash
 termrouter provider test local
@@ -1317,125 +1687,77 @@ termrouter provider test local
 
 ### Streaming stops after partial output
 
-TermRouter intentionally does not switch models after the first visible stream content. Check the request explanation and logs for an upstream stream failure:
+TermRouter intentionally refuses to switch models after content commitment. Inspect the request explanation and logs:
 
 ```bash
 termrouter explain --request <request-id>
-termrouter logs
+termrouter logs --request <request-id>
 ```
 
-### Vault works interactively but not as a service
+### `402 unpriced_route`
 
-Confirm that the service process receives the supported vault unlock mechanism. Do not place the vault password in `config.yaml` or commit vault secrets to version control.
+A spend-enforced request resolved to a provider/model without configured pricing. Add an exact or provider-level pricing entry and validate the configuration.
+
+### `503 quota_policy_unavailable`
+
+TermRouter could not read authoritative usage state for a key requiring fail-closed quota enforcement. Restore database availability before retrying.
+
+### `503 server_concurrency_limit`
+
+The process-wide request limit has been reached. Retry after active requests complete or adjust `server.max_concurrency` after capacity testing.
+
+### Vault works interactively but not under systemd
+
+Ensure the service receives the supported passphrase/unlock mechanism. Never place vault plaintext secrets inside `config.yaml` or commit them to source control.
 
 ### Port already in use
 
-Inspect the current TermRouter process:
-
 ```bash
 termrouter status
+sudo ss -ltnp | grep -E ':8787|:8788'
 ```
 
-Then either stop it or configure another listener port.
+Stop the existing process or select another configured port.
 
-\---
+---
 
-## Development
+## Roadmap
 
-### Build and test
+Potential future work includes:
 
-```bash
-go fmt ./...
-go vet ./...
-go test ./...
-go test -race ./...
-go build -trimpath -o bin/termrouter ./cmd/termrouter
-```
+- native TLS or additional hardened deployment tooling;
+- native Gemini compatibility;
+- embeddings and additional multimodal endpoints;
+- broader provider-specific compatibility;
+- expanded independent benchmark registry;
+- stronger tokenizer-aware cost estimation;
+- feedback-based profile calibration;
+- learned or pluggable task classifiers;
+- semantic context caching and delta communication;
+- shared semantic memory for agent workflows;
+- signed release artifacts and expanded packaging;
+- distributed or multi-node state where justified.
 
-### Make targets
+Roadmap items are directional and are not guarantees of implementation.
 
-Inspect the repository `Makefile` for available development and release targets:
-
-```bash
-make help
-```
-
-### Isolated development run
-
-```bash
-export TERMROUTER\\\_HOME=/tmp/termrouter-dev
-./bin/termrouter init --backend vault --create-key
-./bin/termrouter serve
-```
-
-### Recommended Smart Route validation
-
-Before changing classifier or scoring behavior:
-
-1. Add or update deterministic classification fixtures.
-2. Validate hard-capability filtering.
-3. Test tied candidate scores and deterministic tie-breaking.
-4. Test low-confidence fallback.
-5. Test session-affinity reuse and reclassification.
-6. Test shadow mode does not modify live selection.
-7. Test fallback before stream commitment.
-8. Test no model switch after stream commitment.
-9. Run race tests.
-10. Confirm logs contain no test canary secrets or prompt bodies by default.
-
-### Architecture documentation
-
-Architecture decisions are stored under:
-
-```text
-docs/adr/
-```
-
-Keep durable technical decisions documented there, especially changes to:
-
-* Protocol normalization
-* Credential storage
-* Streaming behavior
-* Smart classification
-* Candidate scoring
-* Session identity
-* Persistence schema
-* Security defaults
-
-\---
-
-## Repository layout
-
-```text
-TerminalRouter/
-├── bin/                  # Local build output
-├── cmd/termrouter/       # CLI entrypoint and commands
-├── docs/adr/             # Architecture decision records
-├── internal/             # Gateway, routing, providers, storage, security, and Smart Routes
-├── .gitignore
-├── LICENSE
-├── Makefile
-├── README.md
-├── go.mod
-└── go.sum
-```
-
-\---
+---
 
 ## Design principles
 
-1. **Terminal first** — every feature is operable without a browser.
-2. **Local first** — localhost is the safe default.
-3. **Protocol aware** — OpenAI and Anthropic requests are normalized rather than blindly forwarded.
-4. **Provider independent** — clients use TermRouter aliases, not provider-specific configuration.
-5. **Explainable routing** — automatic decisions can be inspected.
-6. **Hard constraints before preferences** — capability and security requirements cannot be outscored.
-7. **Safe streaming** — no cross-model stream merging.
-8. **Private by default** — credentials and prompt bodies are not ordinary log content.
-9. **Backward compatible** — deterministic aliases remain available when Smart Routes are disabled.
-10. **One execution engine** — Smart Routes produce plans; existing retry and fallback execute them.
+1. **Terminal first** — essential functionality never requires a browser.
+2. **Local first** — loopback is the safe default.
+3. **Protocol aware** — requests are normalized rather than blindly forwarded.
+4. **Provider independent** — clients depend on aliases, not upstream configuration.
+5. **Explainable routing** — automatic decisions remain inspectable.
+6. **Hard constraints before preferences** — security and capabilities cannot be outscored.
+7. **Safe streaming** — fallback never splices multiple models into one response.
+8. **Private by default** — secrets and prompt bodies are not ordinary log content.
+9. **Fail closed where financial or security policy requires it.**
+10. **One execution engine** — Smart Routes select plans; existing execution logic runs them.
+11. **Evidence before assumption** — model profiles prefer traceable evidence and review.
+12. **Backward compatibility** — deterministic aliases remain available without Smart Routes.
 
-\---
+---
 
 ## Contributing
 
@@ -1443,50 +1765,33 @@ Contributions are welcome.
 
 Before opening a pull request:
 
-1. Keep the terminal-only and local-first scope intact.
-2. Add tests for user-visible behavior.
-3. Add golden fixtures for protocol or classifier changes.
-4. Test streaming cancellation and failure paths where relevant.
-5. Run formatting, vetting, normal tests, and race tests.
-6. Update CLI help and README examples when commands change.
+1. Preserve terminal-first and local-first behavior.
+2. Keep the Console loopback-only and out of the public inference surface.
+3. Add tests for user-visible and security-sensitive behavior.
+4. Add deterministic fixtures for protocol, classifier, or evidence changes.
+5. Test cancellation, streaming, timeout, and fallback boundaries.
+6. Run formatting, vetting, normal tests, and race tests.
 7. Add a migration for persistent schema changes.
-8. Never commit provider keys, router client keys, prompts, vault files, or local databases.
-9. Preserve explainability for Smart Route changes.
-10. Document durable architectural changes under `docs/adr/`.
+8. Update CLI help and documentation when commands or defaults change.
+9. Never commit credentials, client keys, prompts, vaults, databases, or private logs.
+10. Preserve Smart Route explainability and profile provenance.
+11. Document durable architectural changes with an ADR.
+12. Include a concise remediation or validation report for security-sensitive changes.
 
-When reporting a security issue, do not include real credentials, private prompts, or exploitable secrets in a public issue.
+Report security issues privately and do not include real credentials, private prompts, or exploitable deployment details in a public issue.
 
-\---
-
-## Roadmap
-
-Potential future work includes:
-
-* Native TLS or documented hardened reverse-proxy deployment
-* Additional provider protocols
-* Native Gemini compatibility
-* Additional service types such as embeddings
-* More client integration guides
-* Expanded model-profile catalog
-* Additional Smart Route policy controls
-* Optional classifier backends
-* Feedback-based profile calibration using explicit quality signals
-* Improved release packaging and signed binaries
-
-Roadmap items are not guarantees and should not be treated as implemented functionality.
-
-\---
+---
 
 ## License
 
 TermRouter is licensed under the [MIT License](LICENSE).
 
-\---
+---
 
 <div align="center">
 
 **TermRouter decides who should answer. The selected model produces the answer.**
 
-[Back to top](#termrouter)
+One endpoint · Stable aliases · Intelligent routing · Local control
 
 </div>

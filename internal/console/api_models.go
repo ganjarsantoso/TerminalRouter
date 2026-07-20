@@ -8,15 +8,15 @@ import (
 	"github.com/termrouter/termrouter/internal/smart"
 )
 
-// allProfilesFromConfig returns every config profile (user + external) keyed by id.
+// allProfilesFromConfig returns the effective resolved profile for every
+// configured profile id (layered resolution applied).
 func allProfilesFromConfig(cfg *config.Config) map[string]smart.ModelProfile {
-	user, external := smart.SplitProfilesFromConfig(cfg)
-	out := make(map[string]smart.ModelProfile, len(user)+len(external))
-	for k, v := range user {
-		out[k] = v
-	}
-	for k, v := range external {
-		out[k] = v
+	ps := smart.NewProfileStoreFromConfig(cfg, false)
+	out := make(map[string]smart.ModelProfile, len(cfg.ModelProfiles))
+	for id := range cfg.ModelProfiles {
+		provider, model := splitProfileID(id)
+		p, _ := ps.Resolve(provider, model, id)
+		out[id] = p
 	}
 	return out
 }
@@ -90,13 +90,12 @@ func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 	ps := smart.NewProfileStoreFromConfig(rc.Cfg, true)
 	rows := []map[string]any{}
-	for k, mp := range rc.Cfg.ModelProfiles {
-		src := mp.Source
-		if src == "" {
-			src = smart.SourceUser
-		}
-		p, _ := ps.Resolve("", "", k)
-		rows = append(rows, profileRow(k, p, src))
+	for id := range rc.Cfg.ModelProfiles {
+		provider, model := splitProfileID(id)
+		res := ps.ResolveDetailed(provider, model, id)
+		row := profileRow(id, res.Effective, res.Effective.Source)
+		row["capabilities_provenance"] = res.Capabilities
+		rows = append(rows, row)
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i]["id"].(string) < rows[j]["id"].(string) })
 	writeJSON(w, http.StatusOK, map[string]any{"profiles": rows})
@@ -121,20 +120,22 @@ func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	ps := smart.NewProfileStoreFromConfig(rc.Cfg, true)
 	provider, model := splitProfileID(id)
-	p, found := ps.Resolve(provider, model, id)
+	res := ps.ResolveDetailed(provider, model, id)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":          id,
-		"source":      p.Source,
-		"found":       found,
-		"capabilities": p.Capabilities,
-		"properties":  p.Properties,
+		"source":      res.Effective.Source,
+		"found":       res.Found,
+		"capabilities": res.Effective.Capabilities,
+		"capabilities_provenance": res.Capabilities,
+		"properties":  res.Effective.Properties,
+		"property_sources": res.PropertySources,
 	})
 }
 
 func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Capabilities map[string]float64         `json:"capabilities"`
+		Capabilities map[string]float64          `json:"capabilities"`
 		Properties   config.ModelPropertiesConfig `json:"properties"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
@@ -146,16 +147,22 @@ func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 			cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
 		}
 		mp := cfg.ModelProfiles[id]
-		if mp.Capabilities == nil && body.Capabilities != nil {
-			mp.Capabilities = map[string]float64{}
+		// Manual edit updates only the user-override layer, merging with any
+		// existing override fields (never copying lower-layer values up).
+		if mp.UserOverrides == nil {
+			mp.UserOverrides = &config.ProfileBaseline{}
+		}
+		if mp.UserOverrides.Capabilities == nil {
+			mp.UserOverrides.Capabilities = map[string]float64{}
 		}
 		for k, v := range body.Capabilities {
-			mp.Capabilities[k] = v
+			mp.UserOverrides.Capabilities[k] = v
 		}
-		mp.Properties = body.Properties
-		mp.Source = smart.SourceUser
+		if mp.UserOverrides.Properties == nil {
+			mp.UserOverrides.Properties = &config.ModelPropertiesConfig{}
+		}
+		mergeProperties(mp.UserOverrides.Properties, body.Properties)
 		cfg.ModelProfiles[id] = mp
-		// Validate via smart package.
 		prof := allProfilesFromConfig(cfg)[id]
 		return smart.ValidateProfile(prof)
 	})
@@ -166,13 +173,56 @@ func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "revision": rev})
 }
 
+// mergeProperties copies only the fields explicitly set in src into dst. A src
+// value is "set" when bools are non-nil, privacy is non-empty, or ints are > 0.
+func mergeProperties(dst *config.ModelPropertiesConfig, src config.ModelPropertiesConfig) {
+	if src.Vision != nil {
+		dst.Vision = src.Vision
+	}
+	if src.Tools != nil {
+		dst.Tools = src.Tools
+	}
+	if src.ParallelTools != nil {
+		dst.ParallelTools = src.ParallelTools
+	}
+	if src.StructuredOutput != nil {
+		dst.StructuredOutput = src.StructuredOutput
+	}
+	if src.Streaming != nil {
+		dst.Streaming = src.Streaming
+	}
+	if src.ContextWindow > 0 {
+		dst.ContextWindow = src.ContextWindow
+	}
+	if src.MaxOutputTokens > 0 {
+		dst.MaxOutputTokens = src.MaxOutputTokens
+	}
+	if src.CostTier > 0 {
+		dst.CostTier = src.CostTier
+	}
+	if src.LatencyTier > 0 {
+		dst.LatencyTier = src.LatencyTier
+	}
+	if src.Privacy != "" {
+		dst.Privacy = src.Privacy
+	}
+}
+
 func (s *Server) handleResetProfile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	rev, err := s.applyMutation("profile_reset", id, func(cfg *config.Config) error {
-		if _, ok := cfg.ModelProfiles[id]; !ok {
+		mp, ok := cfg.ModelProfiles[id]
+		if !ok {
 			return errNotFound("profile")
 		}
-		delete(cfg.ModelProfiles, id)
+		// Reset removes user overrides, revealing assessment/external/builtin
+		// baselines underneath. Remove the whole entry only if nothing remains.
+		mp.UserOverrides = nil
+		if mp.ExternalBaseline == nil && mp.AssessmentBaseline == nil {
+			delete(cfg.ModelProfiles, id)
+		} else {
+			cfg.ModelProfiles[id] = mp
+		}
 		return nil
 	})
 	if err != nil {

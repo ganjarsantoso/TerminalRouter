@@ -34,6 +34,7 @@ func keyCreate() *cobra.Command {
 		maxRequestBody  int64
 		portable        bool
 		expires         string
+		unsafePortable  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create",
@@ -51,7 +52,7 @@ For public VPS / shared-agent use, create a restricted portable key:
 			if name == "" {
 				name = "default"
 			}
-			_, _, store, _, err := app.LoadRuntime(mustHome())
+			cfg, _, store, _, err := app.LoadRuntime(mustHome())
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -66,7 +67,12 @@ For public VPS / shared-agent use, create a restricted portable key:
 				Enabled: true, AllowedAliases: aliases, Portable: portable,
 				CreatedAt: time.Now().UTC(),
 			}
-			applyKeyLimitFlags(&k, rpm, maxConcurrent, dailyRequests, dailyInputTok, dailyOutputTok, dailyCostUSD, maxOutputTokens, maxRequestBody, expires)
+			if err := applyKeyLimitFlags(&k, rpm, maxConcurrent, dailyRequests, dailyInputTok, dailyOutputTok, dailyCostUSD, maxOutputTokens, maxRequestBody, expires); err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
+			if err := checkPortableKeySafety(cfg, k, unsafePortable); err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
 			if err := store.InsertClientKey(cmd.Context(), k); err != nil {
 				return Exit(ExitGeneral, err)
 			}
@@ -78,6 +84,9 @@ For public VPS / shared-agent use, create a restricted portable key:
 				}
 				if portable {
 					out["warning"] = portableKeyWarning
+					if missing := portableMissingControls(k); len(missing) > 0 {
+						out["portable_missing_controls"] = missing
+					}
 				}
 				return printJSON(out)
 			}
@@ -89,6 +98,10 @@ For public VPS / shared-agent use, create a restricted portable key:
 			if portable {
 				fmt.Println()
 				fmt.Println(portableKeyWarning)
+				if missing := portableMissingControls(k); len(missing) > 0 {
+					fmt.Printf("WARNING: portable key created without mandatory controls: %s.\n", strings.Join(missing, ", "))
+					fmt.Println("This is permitted in local-only mode but will be rejected in public-hosting mode.")
+				}
 			}
 			fmt.Println("Save it now; only its hash will be retained.")
 			return nil
@@ -105,6 +118,7 @@ For public VPS / shared-agent use, create a restricted portable key:
 	cmd.Flags().IntVar(&maxOutputTokens, "max-output-tokens", 0, "Cap max_tokens / max_output_tokens per request (0 = unlimited)")
 	cmd.Flags().Int64Var(&maxRequestBody, "max-request-body", 0, "Per-key request body size cap in bytes (0 = unlimited)")
 	cmd.Flags().BoolVar(&portable, "portable", false, "Mark as shared portable key (shows security warning)")
+	cmd.Flags().BoolVar(&unsafePortable, "unsafe-unrestricted-portable", false, "Override public-hosting portable-key safety (requires alias, body, and spend limits); use only with explicit intent")
 	cmd.Flags().StringVar(&expires, "expires", "", "Optional expiration (RFC3339 timestamp)")
 	return cmd
 }
@@ -115,7 +129,7 @@ const portableKeyWarning = `WARNING: Portable/shared key
   • Device-specific revocation and attribution are unavailable
   • Treat this key like a password with direct financial impact`
 
-func applyKeyLimitFlags(k *storage.ClientKey, rpm, maxConcurrent, dailyRequests int, dailyInputTok, dailyOutputTok int64, dailyCostUSD float64, maxOutputTokens int, maxRequestBody int64, expires string) {
+func applyKeyLimitFlags(k *storage.ClientKey, rpm, maxConcurrent, dailyRequests int, dailyInputTok, dailyOutputTok int64, dailyCostUSD float64, maxOutputTokens int, maxRequestBody int64, expires string) error {
 	if rpm > 0 {
 		k.RateLimitRPM = &rpm
 	}
@@ -142,10 +156,49 @@ func applyKeyLimitFlags(k *storage.ClientKey, rpm, maxConcurrent, dailyRequests 
 	}
 	if expires != "" {
 		t, err := time.Parse(time.RFC3339, expires)
-		if err == nil {
-			k.ExpiresAt = &t
+		if err != nil {
+			return fmt.Errorf("invalid --expires: expected RFC3339 timestamp: %w", err)
+		}
+		k.ExpiresAt = &t
+	}
+	return nil
+}
+
+// checkPortableKeySafety enforces mandatory controls on portable keys in
+// public-hosting mode (fail-closed): a portable key exposed publicly must have
+// an alias restriction, a request-body limit, and a daily spend budget. In
+// local-only mode it is permitted but a prominent warning is shown. The
+// explicit --unsafe-unrestricted-portable flag is the only escape hatch and
+// cannot be triggered by accident (it must be passed deliberately).
+// portableMissingControls returns the mandatory-control flags absent from a
+// portable key (alias restriction, request-body limit, daily spend budget).
+func portableMissingControls(k storage.ClientKey) []string {
+	var missing []string
+	if len(k.AllowedAliases) == 0 {
+		missing = append(missing, "--alias")
+	}
+	if k.MaxRequestBody == nil || *k.MaxRequestBody <= 0 {
+		missing = append(missing, "--max-request-body")
+	}
+	if k.DailyEstimatedCostUSD == nil || *k.DailyEstimatedCostUSD <= 0 {
+		missing = append(missing, "--daily-cost-usd")
+	}
+	return missing
+}
+
+func checkPortableKeySafety(cfg *config.Config, k storage.ClientKey, unsafe bool) error {
+	if !k.Portable {
+		return nil
+	}
+	public := cfg != nil && cfg.PublicHosting.Enabled
+	missing := portableMissingControls(k)
+	if public && !unsafe {
+		if len(missing) > 0 {
+			return fmt.Errorf("refusing to create unrestricted portable key in public-hosting mode; missing %s (or pass --unsafe-unrestricted-portable to override)",
+				strings.Join(missing, ", "))
 		}
 	}
+	return nil
 }
 
 func keySetPolicy() *cobra.Command {
@@ -163,13 +216,14 @@ func keySetPolicy() *cobra.Command {
 		setPortable     bool
 		expires         string
 		clearExpires    bool
+		unsafePortable  bool
 	)
 	cmd := &cobra.Command{
 		Use:   "set-policy [id]",
 		Short: "Update policy limits on an existing client key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, store, _, err := app.LoadRuntime(mustHome())
+			cfg, _, store, _, err := app.LoadRuntime(mustHome())
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -243,6 +297,11 @@ func keySetPolicy() *cobra.Command {
 			}
 			if setPortable {
 				k.Portable = portable
+				if portable {
+					if err := checkPortableKeySafety(cfg, k, unsafePortable); err != nil {
+						return Exit(ExitInvalidConfig, err)
+					}
+				}
 			}
 			if clearExpires {
 				k.ExpiresAt = nil
@@ -277,6 +336,7 @@ func keySetPolicy() *cobra.Command {
 	cmd.Flags().Int64Var(&maxRequestBody, "max-request-body", 0, "Per-key request body size cap in bytes (0 clears)")
 	cmd.Flags().BoolVar(&portable, "portable", false, "Mark as portable/shared key")
 	cmd.Flags().BoolVar(&setPortable, "set-portable", false, "Apply --portable flag (required to change portable bit)")
+	cmd.Flags().BoolVar(&unsafePortable, "unsafe-unrestricted-portable", false, "Override public-hosting portable-key safety when enabling portable (requires alias, body, and spend limits)")
 	cmd.Flags().StringVar(&expires, "expires", "", "Expiration RFC3339")
 	cmd.Flags().BoolVar(&clearExpires, "clear-expires", false, "Remove expiration")
 	return cmd

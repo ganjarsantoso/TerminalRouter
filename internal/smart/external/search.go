@@ -69,6 +69,7 @@ func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
 		Endpoint:          cfg.Endpoint,
 		Method:            cfg.Method,
 		FallbackEndpoints: cfg.FallbackEndpoints,
+		safe:              NewSafeFetcher(DefaultFetchLimits(), &http.Client{Timeout: timeout, Transport: transport}),
 	}
 }
 
@@ -82,6 +83,8 @@ type WebSearcher struct {
 	Method string
 	// FallbackEndpoints are alternative endpoints tried when the primary fails.
 	FallbackEndpoints []string
+	// safe enforces SSRF and content controls on page fetches (§17).
+	safe *SafeFetcher
 }
 
 type ddgResult struct {
@@ -242,81 +245,26 @@ func (w *WebSearcher) searchOnce(ctx context.Context, client *http.Client, endpo
 
 // FetchPage implements PageFetcher: fetches a page and returns benchmark-
 // relevant lines (those containing a percentage or Elo near a benchmark
-// keyword), truncated.
+// keyword), truncated. All fetches are subject to SSRF and content controls
+// (§17) via the embedded SafeFetcher; a keyless reader fallback is used only
+// when the direct fetch is blocked.
 func (w *WebSearcher) FetchPage(pageURL string) (string, error) {
-	client := w.Client
-	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+	sf := w.safe
+	if sf == nil {
+		sf = NewSafeFetcher(DefaultFetchLimits(), w.Client)
 	}
-	return w.fetchPageText(context.Background(), client, pageURL)
+	if text, err := sf.FetchPage(pageURL); err == nil {
+		return text, nil
+	}
+	// Fallback: Jina AI reader (keyless) cleans and returns the page text. It
+	// is itself SSRF-checked as an approved reader host.
+	return sf.FetchPage(fetchViaJinaURL(pageURL))
 }
 
-// fetchPageText fetches a page and returns benchmark-relevant lines (those
-// containing a percentage or Elo near a benchmark keyword), truncated. If the
-// direct fetch fails (blocked site, TLS-intercepting proxy), it retries through
-// the keyless Jina AI reader (https://s.jina.ai/<url>), which returns cleaned,
-// LLM-readable page text. This keeps evidence extraction working on sites that
-// would otherwise be unreachable.
-func (w *WebSearcher) fetchPageText(ctx context.Context, client *http.Client, pageURL string) (string, error) {
-	text, err := w.fetchDirect(ctx, client, pageURL)
-	if err != nil {
-		// Fallback: Jina AI reader (keyless) cleans and returns the page text.
-		if jt, jerr := w.fetchViaJina(ctx, client, pageURL); jerr == nil && jt != "" {
-			log.Printf("[external] page fetch via Jina reader fallback: %s", pageURL)
-			text = jt
-			err = nil
-		}
-	}
-	if err != nil {
-		return "", err
-	}
-	return keepBenchmarkLines(text), nil
-}
-
-func (w *WebSearcher) fetchDirect(ctx context.Context, client *http.Client, pageURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "TermRouter/1.0 (+https://github.com/termrouter/termrouter)")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("page returned %d", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	return stripTags(string(raw)), nil
-}
-
-// fetchViaJina fetches a page through the keyless Jina AI reader endpoint,
-// which returns cleaned article text suitable for benchmark extraction.
-func (w *WebSearcher) fetchViaJina(ctx context.Context, client *http.Client, pageURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://s.jina.ai/"+pageURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "TermRouter/1.0 (+https://github.com/termrouter/termrouter)")
-	req.Header.Set("Connection", "close")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("jina reader returned %d", resp.StatusCode)
-	}
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	// Jina already returns clean text (no HTML tags).
-	return string(raw), nil
+// fetchViaJinaURL returns the Jina reader URL for a target page (approved reader
+// host; still SSRF-checked by SafeFetcher).
+func fetchViaJinaURL(pageURL string) string {
+	return "https://s.jina.ai/" + pageURL
 }
 
 // keepBenchmarkLines filters page text down to lines that mention a benchmark

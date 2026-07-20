@@ -159,6 +159,16 @@ const (
 	ErrProviderUnavailable = "provider_unavailable"
 	ErrUpstreamTimeout     = "upstream_timeout"
 	ErrInternal            = "internal_error"
+	// ErrQuotaUnavailable is returned when financial/usage policy state cannot be
+	// read and the key/deployment requires fail-closed behavior (503).
+	ErrQuotaUnavailable = "quota_policy_unavailable"
+	// ErrServerConcurrency is returned when the process-wide concurrency limit is
+	// reached (503).
+	ErrServerConcurrency = "server_concurrency_limit"
+	// ErrUnpriced is returned when a spend-enforced client key would route to a
+	// provider/model that has no configured pricing. It is non-retryable and must
+	// not trigger fallback. HTTP 402 (Payment Required).
+	ErrUnpriced = "unpriced_route"
 )
 
 func NewError(code, message string, httpStatus int) *Error {

@@ -25,13 +25,18 @@ func modelExternalCmd() *cobra.Command {
 	return cmd
 }
 
-func newExternalService() (*external.Service, func(), error) {
-	cfg, _, store, _, err := app.LoadRuntime(mustHome())
+// newExternalService loads the runtime once and returns the external service,
+// the loaded config, and the config paths. The closer closes the single store
+// handle; callers must not open a second runtime, or the extra store handle
+// leaks (SQLite lock / descriptor pressure). cfg and paths are returned so
+// commands that need config can reuse this single load.
+func newExternalService() (*external.Service, *config.Config, config.Paths, func(), error) {
+	cfg, paths, store, _, err := app.LoadRuntime(mustHome())
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, config.Paths{}, nil, err
 	}
 	searcher := external.NewWebSearcher(cfg.WebSearch)
-	return external.NewService(store, searcher, nil), func() { store.Close() }, nil
+	return external.NewService(store, searcher, nil), cfg, paths, func() { store.Close() }, nil
 }
 
 func modelExternalRegistry() *cobra.Command {
@@ -39,7 +44,7 @@ func modelExternalRegistry() *cobra.Command {
 		Use:   "registry",
 		Short: "Show the bundled curated benchmark registry info",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, closer, err := newExternalService()
+			svc, _, _, closer, err := newExternalService()
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -64,7 +69,7 @@ func modelExternalSearch() *cobra.Command {
 		Short: "Search the curated registry for independent benchmark consensus",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, closer, err := newExternalService()
+			svc, _, _, closer, err := newExternalService()
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -102,19 +107,17 @@ func modelExternalProposal() *cobra.Command {
 		Short: "Build a reviewable external-consensus proposal for a model",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, closer, err := newExternalService()
+			svc, cfg, _, closer, err := newExternalService()
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
 			defer closer()
 			provider, model := splitProfileID(args[0])
-			cfg, _, _, _, err := app.LoadRuntime(mustHome())
-			if err != nil {
-				return Exit(ExitInvalidConfig, err)
-			}
 			current := map[string]float64{}
-			if mp, ok := cfg.ModelProfiles[args[0]]; ok {
-				for k, v := range mp.Capabilities {
+			ps := smart.NewProfileStoreFromConfig(cfg, false)
+			prov, mod := splitProfileID(args[0])
+			if eff, ok := ps.Resolve(prov, mod, args[0]); ok {
+				for k, v := range eff.Capabilities {
 					current[k] = v
 				}
 			}
@@ -151,7 +154,7 @@ func modelExternalListProposals() *cobra.Command {
 		Use:   "list-proposals",
 		Short: "List saved external-consensus proposals",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, closer, err := newExternalService()
+			svc, _, _, closer, err := newExternalService()
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -183,7 +186,7 @@ func modelExternalApply() *cobra.Command {
 		Short: "Apply an external-consensus proposal to the model profile",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, closer, err := newExternalService()
+			svc, cfg, paths, closer, err := newExternalService()
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -200,30 +203,24 @@ func modelExternalApply() *cobra.Command {
 				return Exit(ExitGeneral, err)
 			}
 
-			cfg, paths, _, _, err := app.LoadRuntime(mustHome())
-			if err != nil {
-				return Exit(ExitInvalidConfig, err)
-			}
 			key := p.ProviderID + "/" + p.ModelID
 			if cfg.ModelProfiles == nil {
 				cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
 			}
 			mp := cfg.ModelProfiles[key]
-			if mp.Capabilities == nil {
-				mp.Capabilities = map[string]float64{}
+			if mp.ExternalBaseline == nil {
+				mp.ExternalBaseline = &config.ProfileBaseline{}
 			}
-			mp.Source = smart.SourceExternal
-			mp.Version = p.RegistryVersion
+			mp.ExternalBaseline.Version = p.RegistryVersion
+			if mp.ExternalBaseline.Capabilities == nil {
+				mp.ExternalBaseline.Capabilities = map[string]float64{}
+			}
 			for k, v := range caps {
-				mp.Capabilities[k] = v
+				mp.ExternalBaseline.Capabilities[k] = v
 			}
-			// Preserve any user overrides that already exist (never override a
-			// populated user source on the same key).
-			if existing, ok := cfg.ModelProfiles[key]; ok && existing.Source == smart.SourceUser {
-				for k, v := range existing.Capabilities {
-					mp.Capabilities[k] = v
-				}
-			}
+			// External consensus sits below user overrides and local assessment;
+			// per-field resolution keeps higher layers' values for shared fields,
+			// so we must not copy or overwrite user/assessment values here.
 			cfg.ModelProfiles[key] = mp
 			if err := config.Save(paths.Config, cfg); err != nil {
 				return Exit(ExitGeneral, err)
@@ -240,7 +237,7 @@ func modelExternalHistory() *cobra.Command {
 		Use:   "history",
 		Short: "Show external-consensus import history",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			svc, closer, err := newExternalService()
+			svc, _, _, closer, err := newExternalService()
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}

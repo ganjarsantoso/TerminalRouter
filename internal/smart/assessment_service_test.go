@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/termrouter/termrouter/internal/config"
 )
 
 // memoryAssessmentStore implements AssessmentStore interface operations using storage types.
@@ -155,6 +157,56 @@ func TestEstimate_Local(t *testing.T) {
 	est := svc.Estimate("local", "qwen-coder", DepthStandard, nil)
 	if est.LeavesLocal {
 		t.Error("expected leaves_local false for local provider")
+	}
+}
+
+// pricedService builds a service with configured pricing so Estimate can use
+// the same resolution path as normal request accounting.
+func pricedService(store AssessmentPersister) *ModelAssessmentService {
+	profiles := NewProfileStore(nil, true)
+	return &ModelAssessmentService{
+		activeRuns:      map[string]context.CancelFunc{},
+		store:           store,
+		credChecker:     func(string) bool { return true },
+		providerChecker: func(string, string) (bool, bool, bool) { return true, true, true },
+		profiles:        profiles,
+		cfg: &config.Config{
+			Pricing: map[string]config.PriceConfig{
+				"openai/gpt-4o": {InputUSDPerMillion: 5.0, OutputUSDPerMillion: 15.0, Currency: "usd"},
+			},
+		},
+		DisableAutoRun: true,
+	}
+}
+
+func TestEstimate_UsesConfiguredPricing(t *testing.T) {
+	store := newTestAssessmentStore()
+	svc := pricedService(store)
+	est := svc.Estimate("openai", "gpt-4o", DepthStandard, nil)
+	if !est.CostKnown {
+		t.Fatalf("expected cost known with pricing configured; warnings=%v", est.Warnings)
+	}
+	// Expected cost: 70%% input + 30%% output of RequestCount*3000 tokens.
+	inTok := int(float64(est.EstimatedTokens) * 0.7)
+	outTok := est.EstimatedTokens - inTok
+	want := float64(inTok)/1e6*5.0 + float64(outTok)/1e6*15.0
+	if est.EstimatedCost <= 0 || est.EstimatedCost < want*0.999 || est.EstimatedCost > want*1.001 {
+		t.Fatalf("expected cost ~%.6f from pricing, got %.6f", want, est.EstimatedCost)
+	}
+}
+
+func TestEstimate_NoPricingNoFabrication(t *testing.T) {
+	store := newTestAssessmentStore()
+	svc := newTestService(store) // cfg nil -> no pricing
+	est := svc.Estimate("openai", "gpt-4o", DepthStandard, nil)
+	if est.CostKnown {
+		t.Error("expected cost_known false when pricing unavailable")
+	}
+	if est.EstimatedCost != 0 {
+		t.Errorf("expected no fabricated monetary value, got %v", est.EstimatedCost)
+	}
+	if len(est.Warnings) == 0 {
+		t.Error("expected a warning that pricing must be configured")
 	}
 }
 

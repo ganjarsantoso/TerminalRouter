@@ -177,10 +177,11 @@ func (s *Service) BuildProposal(ctx context.Context, providerID, modelID string,
 		Fields:         fields,
 		Overall:        cp.Overall,
 		Confidence:     cp.Confidence,
-		Sources:        cp.Sources,
-		CreatedAt:      time.Now().UTC(),
-		Status:         "pending",
+		Sources:         cp.Sources,
+		CreatedAt:       time.Now().UTC(),
+		Status:          "pending",
 		RegistryVersion: registryVersion,
+		MandatoryReview: cp.MandatoryReview,
 	}
 	return &p, true, nil
 }
@@ -211,6 +212,11 @@ func (s *Service) DismissProposal(id string) error {
 // ApplyProposal returns the capability map produced by a proposal (caller is
 // responsible for writing it into the model profile). It also records the import.
 func (s *Service) ApplyProposal(p Proposal) (map[string]float64, error) {
+	// §18: a proposal that needs human sign-off (strong-probable variant match)
+	// must not be applied automatically. Callers must resolve the review first.
+	if p.MandatoryReview {
+		return nil, fmt.Errorf("proposal %s requires mandatory human review before apply", p.ID)
+	}
 	caps := map[string]float64{}
 	for _, f := range p.Fields {
 		caps[f.Capability.String()] = f.Proposed

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
@@ -74,15 +75,59 @@ func modelAssessRun() *cobra.Command {
 				}
 			}
 
-			credCheck := func(providerID string) bool { return true }
-			provCheck := func(providerID, modelID string) (bool, bool, bool) { return true, true, true }
-			ps := smart.NewProfileStore(smart.ProfilesFromConfig(cfg), true)
+			// Real preflight checks: verify provider config, credential
+			// resolution, adapter availability, and model connectivity rather
+			// than claiming success unconditionally.
 			reg := provider.NewRegistry()
 			reg.Register(compatible.NewOpenAI())
 			reg.Register(compatible.NewCompatible())
 			reg.Register(panthropic.New())
+			credCheck := func(providerID string) bool {
+				p, ok := cfg.Providers[providerID]
+				if !ok {
+					return false
+				}
+				if p.CredentialRef == "" || p.CredentialRef == "none://" {
+					return false
+				}
+				secret, err := creds.Resolve(p.CredentialRef)
+				return err == nil && secret != ""
+			}
+			providerCheck := func(providerID, modelID string) (bool, bool, bool) {
+				p, ok := cfg.Providers[providerID]
+				if !ok {
+					return false, false, false
+				}
+				adapter, ok := reg.Get(p.Type)
+				if !ok {
+					return false, false, false
+				}
+				secret, err := creds.Resolve(p.CredentialRef)
+				if err != nil || secret == "" {
+					return false, false, false
+				}
+				models, err := adapter.ListModels(context.Background(), p, secret)
+				if err != nil {
+					return false, false, false
+				}
+				for _, m := range models {
+					if m.ID == modelID {
+						return true, true, p.Type != "anthropic"
+					}
+				}
+				return false, false, false
+			}
+			ps := smart.NewProfileStore(smart.ProfilesFromConfig(cfg), true)
 			coord := execution.New(reg, creds, store, nil)
-			svc := smart.NewModelAssessmentService(store, credCheck, provCheck, ps, coord, cfg)
+			svc := smart.NewModelAssessmentService(store, credCheck, providerCheck, ps, coord, cfg)
+
+			// Surface a pricing warning up front if cost cannot be estimated
+			// from configured pricing (no fabricated value is returned).
+			if est := svc.Estimate(mustSplitProvider(id), mustSplitModel(id), d, catList); !est.CostKnown {
+				for _, w := range est.Warnings {
+					fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", w)
+				}
+			}
 
 			rec, err := svc.Start(mustSplitProvider(id), mustSplitModel(id), d, catList, nil)
 			if err != nil {
@@ -173,22 +218,17 @@ func modelAssessApply() *cobra.Command {
 				cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
 			}
 			mp := cfg.ModelProfiles[key]
-			if mp.Capabilities == nil {
-				mp.Capabilities = map[string]float64{}
+			if mp.AssessmentBaseline == nil {
+				mp.AssessmentBaseline = &config.ProfileBaseline{}
+			}
+			bl := mp.AssessmentBaseline
+			bl.Version = rec.BenchmarkVersion
+			if bl.Capabilities == nil {
+				bl.Capabilities = map[string]float64{}
 			}
 			for k, v := range prop.Capabilities {
 				if len(accepted) == 0 || containsString(accepted, k) {
-					mp.Capabilities[k] = v
-				}
-			}
-			mp.Source = smart.SourceSelfAssess
-			mp.Version = rec.BenchmarkVersion
-			if preserveOverrides {
-				existing := cfg.ModelProfiles[key]
-				for k, v := range existing.Capabilities {
-					if _, ok := mp.Capabilities[k]; ok && existing.Source == smart.SourceUser {
-						mp.Capabilities[k] = v
-					}
+					bl.Capabilities[k] = v
 				}
 			}
 			cfg.ModelProfiles[key] = mp
@@ -310,8 +350,11 @@ func modelProfileList() *cobra.Command {
 				Source string `json:"source"`
 			}
 			var rows []row
-			for k, mp := range cfg.ModelProfiles {
-				src := mp.Source
+			ps := smart.NewProfileStoreFromConfig(cfg, true)
+			for k := range cfg.ModelProfiles {
+				provider, model := splitProfileID(k)
+				res := ps.ResolveDetailed(provider, model, k)
+				src := res.Effective.Source
 				if src == "" {
 					src = smart.SourceUser
 				}
@@ -340,7 +383,7 @@ func modelProfileShow() *cobra.Command {
 			}
 			defer store.Close()
 			id := args[0]
-			ps := smart.NewProfileStore(smart.ProfilesFromConfig(cfg), true)
+			ps := smart.NewProfileStoreFromConfig(cfg, true)
 			provider, model := splitProfileID(id)
 			p, found := ps.Resolve(provider, model, id)
 			if !found && p.Source == smart.SourceUnknown {
@@ -387,13 +430,18 @@ func modelProfileSet() *cobra.Command {
 				cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
 			}
 			mp := cfg.ModelProfiles[id]
-			if mp.Capabilities == nil {
-				mp.Capabilities = map[string]float64{}
+			if mp.UserOverrides == nil {
+				mp.UserOverrides = &config.ProfileBaseline{}
 			}
-			mp.Source = smart.SourceUser
+			if mp.UserOverrides.Capabilities == nil {
+				mp.UserOverrides.Capabilities = map[string]float64{}
+			}
+			if mp.UserOverrides.Properties == nil {
+				mp.UserOverrides.Properties = &config.ModelPropertiesConfig{}
+			}
 			setCap := func(name string, v float64, changed bool) {
 				if changed && v >= 0 {
-					mp.Capabilities[name] = v
+					mp.UserOverrides.Capabilities[name] = v
 				}
 			}
 			setCap(smart.CapGeneral, general, cmd.Flags().Changed("general"))
@@ -403,27 +451,28 @@ func modelProfileSet() *cobra.Command {
 			setCap(smart.CapWriting, writing, cmd.Flags().Changed("writing"))
 			setCap(smart.CapToolUse, toolUse, cmd.Flags().Changed("tool-use"))
 			if cmd.Flags().Changed("cost-tier") {
-				mp.Properties.CostTier = costTier
+				mp.UserOverrides.Properties.CostTier = costTier
 			}
 			if cmd.Flags().Changed("latency-tier") {
-				mp.Properties.LatencyTier = latencyTier
+				mp.UserOverrides.Properties.LatencyTier = latencyTier
 			}
 			if cmd.Flags().Changed("privacy") {
-				mp.Properties.Privacy = privacy
+				mp.UserOverrides.Properties.Privacy = privacy
 			}
 			if cmd.Flags().Changed("context-window") {
-				mp.Properties.ContextWindow = contextWindow
+				mp.UserOverrides.Properties.ContextWindow = contextWindow
 			}
 			if cmd.Flags().Changed("vision") {
 				b := strings.EqualFold(vision, "true") || vision == "1"
-				mp.Properties.Vision = &b
+				mp.UserOverrides.Properties.Vision = &b
 			}
 			if cmd.Flags().Changed("tools") {
 				b := strings.EqualFold(tools, "true") || tools == "1"
-				mp.Properties.Tools = &b
+				mp.UserOverrides.Properties.Tools = &b
 			}
-			prof := smart.ProfilesFromConfig(&config.Config{ModelProfiles: map[string]config.ModelProfileConfig{id: mp}})[id]
-			if err := smart.ValidateProfile(prof); err != nil {
+			prov, mod := splitProfileID(id)
+			prof := smart.NewProfileStoreFromConfig(&config.Config{ModelProfiles: map[string]config.ModelProfileConfig{id: mp}}, true).ResolveDetailed(prov, mod, id)
+			if err := smart.ValidateProfile(prof.Effective); err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
 			cfg.ModelProfiles[id] = mp
@@ -463,7 +512,16 @@ func modelProfileReset() *cobra.Command {
 				return Exit(ExitInvalidConfig, err)
 			}
 			defer store.Close()
-			delete(cfg.ModelProfiles, args[0])
+			mp, ok := cfg.ModelProfiles[args[0]]
+			if !ok {
+				return Exit(ExitInvalidConfig, fmt.Errorf("profile %q not found", args[0]))
+			}
+			mp.UserOverrides = nil
+			if mp.ExternalBaseline == nil && mp.AssessmentBaseline == nil {
+				delete(cfg.ModelProfiles, args[0])
+			} else {
+				cfg.ModelProfiles[args[0]] = mp
+			}
 			if err := config.Save(paths.Config, cfg); err != nil {
 				return Exit(ExitGeneral, err)
 			}
@@ -486,7 +544,7 @@ func modelProfileValidate() *cobra.Command {
 			}
 			defer store.Close()
 			id := args[0]
-			ps := smart.NewProfileStore(smart.ProfilesFromConfig(cfg), true)
+			ps := smart.NewProfileStoreFromConfig(cfg, true)
 			provider, model := splitProfileID(id)
 			p, _ := ps.Resolve(provider, model, id)
 			if err := smart.ValidateProfile(p); err != nil {

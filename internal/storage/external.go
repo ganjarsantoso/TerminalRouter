@@ -17,17 +17,18 @@ func (s *Store) SaveExternalProposal(p external.Proposal) error {
 	}
 	_, err = s.db.Exec(`
 INSERT INTO external_profile_proposals
-  (id, provider_id, model_id, model_identity, fields_json, created_at, status, registry_version)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  (id, provider_id, model_id, model_identity, fields_json, created_at, status, registry_version, mandatory_review)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
   provider_id=excluded.provider_id,
   model_id=excluded.model_id,
   model_identity=excluded.model_identity,
   fields_json=excluded.fields_json,
   status=excluded.status,
-  registry_version=excluded.registry_version
+  registry_version=excluded.registry_version,
+  mandatory_review=excluded.mandatory_review
 `, p.ID, p.ProviderID, p.ModelID, p.ModelIdentity, string(fields),
-		p.CreatedAt.UTC().Format(time.RFC3339), p.Status, p.RegistryVersion)
+		p.CreatedAt.UTC().Format(time.RFC3339), p.Status, p.RegistryVersion, boolToInt(p.MandatoryReview))
 	return err
 }
 
@@ -35,11 +36,12 @@ ON CONFLICT(id) DO UPDATE SET
 func (s *Store) LoadExternalProposal(id string) (external.Proposal, bool, error) {
 	var (
 		providerID, modelID, modelIdentity, fieldsJSON, status, registryVersion, createdAt string
+		mandatoryReview                                                                   int
 	)
 	err := s.db.QueryRow(`
-SELECT provider_id, model_id, model_identity, fields_json, created_at, status, registry_version
+SELECT provider_id, model_id, model_identity, fields_json, created_at, status, registry_version, mandatory_review
 FROM external_profile_proposals WHERE id = ?
-`, id).Scan(&providerID, &modelID, &modelIdentity, &fieldsJSON, &createdAt, &status, &registryVersion)
+`, id).Scan(&providerID, &modelID, &modelIdentity, &fieldsJSON, &createdAt, &status, &registryVersion, &mandatoryReview)
 	if err == sql.ErrNoRows {
 		return external.Proposal{}, false, nil
 	}
@@ -52,21 +54,22 @@ FROM external_profile_proposals WHERE id = ?
 	}
 	ca, _ := time.Parse(time.RFC3339, createdAt)
 	return external.Proposal{
-		ID:             id,
-		ProviderID:     providerID,
-		ModelID:        modelID,
-		ModelIdentity:  modelIdentity,
-		Fields:         fields,
-		CreatedAt:      ca,
-		Status:         status,
+		ID:              id,
+		ProviderID:      providerID,
+		ModelID:         modelID,
+		ModelIdentity:   modelIdentity,
+		Fields:          fields,
+		CreatedAt:       ca,
+		Status:          status,
 		RegistryVersion: registryVersion,
+		MandatoryReview: mandatoryReview != 0,
 	}, true, nil
 }
 
 // ListExternalProposals returns proposals, optionally filtered by status ("" = all).
 func (s *Store) ListExternalProposals(status string) ([]external.Proposal, error) {
 	rows, err := s.db.Query(`
-SELECT id, provider_id, model_id, model_identity, fields_json, created_at, status, registry_version
+SELECT id, provider_id, model_id, model_identity, fields_json, created_at, status, registry_version, mandatory_review
 FROM external_profile_proposals
 ` + whereStatus(status) + ` ORDER BY created_at DESC`, statusArg(status)...)
 	if err != nil {
@@ -77,8 +80,9 @@ FROM external_profile_proposals
 	for rows.Next() {
 		var (
 			id, providerID, modelID, modelIdentity, fieldsJSON, createdAt, st, registryVersion string
+			mandatoryReview                                                              int
 		)
-		if err := rows.Scan(&id, &providerID, &modelID, &modelIdentity, &fieldsJSON, &createdAt, &st, &registryVersion); err != nil {
+		if err := rows.Scan(&id, &providerID, &modelID, &modelIdentity, &fieldsJSON, &createdAt, &st, &registryVersion, &mandatoryReview); err != nil {
 			return nil, err
 		}
 		var fields []external.ProposalField
@@ -89,6 +93,7 @@ FROM external_profile_proposals
 		out = append(out, external.Proposal{
 			ID: id, ProviderID: providerID, ModelID: modelID, ModelIdentity: modelIdentity,
 			Fields: fields, CreatedAt: ca, Status: st, RegistryVersion: registryVersion,
+			MandatoryReview: mandatoryReview != 0,
 		})
 	}
 	return out, rows.Err()

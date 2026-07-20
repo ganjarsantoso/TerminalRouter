@@ -120,6 +120,7 @@ type ModelProfile struct {
 	Version      string         `json:"version" yaml:"version,omitempty"`
 	Source       string           `json:"source" yaml:"source,omitempty"`
 	Capabilities map[string]float64 `json:"capabilities" yaml:"capabilities,omitempty"`
+	Confidence   map[string]float64 `json:"confidence,omitempty" yaml:"confidence,omitempty"`
 	Properties   ModelProperties `json:"properties" yaml:"properties,omitempty"`
 }
 
@@ -325,8 +326,13 @@ type AssessmentEstimate struct {
 	Depth            AssessmentDepth `json:"depth"`
 	RequestCount     int      `json:"request_count"`
 	EstimatedTokens  int      `json:"estimated_tokens"`
+	EstimatedInputTokens  int     `json:"estimated_input_tokens"`
+	EstimatedOutputTokens int    `json:"estimated_output_tokens"`
 	EstimatedCost    float64  `json:"estimated_cost,omitempty"`
 	CostKnown        bool     `json:"cost_known"`
+	// Warnings explains why a monetary estimate is unavailable (e.g. pricing
+	// not configured). When non-empty, no fabricated cost is returned.
+	Warnings         []string `json:"warnings,omitempty"`
 	LeavesLocal      bool     `json:"leaves_local"`
 	ToolTestsRun     bool     `json:"tool_tests_run"`
 	StreamingTests   bool     `json:"streaming_tests"`

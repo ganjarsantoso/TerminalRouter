@@ -144,6 +144,32 @@ termrouter key disable <key_id>    # immediate emergency revocation
 
 ---
 
+## 6b. External-consensus proposals and mandatory review (§18/§19)
+
+The Web Console can pull external capability estimates (LiveBench, Artificial
+Analysis, SWE-bench, etc.). Variant matching is enforced before any estimate is
+trusted:
+
+- **Exact match** (same creator/family/version/date) — contributes at full
+  weight (1.0).
+- **Strong-probable** (e.g. `preview` vs `stable`, a quantization/context-mode
+  or harness difference) — contributes at half weight (0.5) and flags the
+  proposal `mandatory_review = true`.
+- **Family-only** (version or release-date differs, same family) and
+  **incompatible** (a base model vs its thinking variant, or a different
+  creator/family) — excluded from scoring and shown as excluded evidence.
+
+Per-source and per-benchmark-family contribution caps prevent one source (or a
+leaderboard duplicated across mirror sites) from dominating a capability. The
+same experiment published on multiple sites collapses to one record; the extra
+URLs are stored as provenance, not independent evidence.
+
+A proposal with `mandatory_review` **cannot be applied** — neither via the API
+(`409 mandatory_review`) nor programmatically. Review and clear/edit it in the
+Console first. This is fail-closed: unverified provenance never auto-applies.
+
+---
+
 ## 7. Install and configure Caddy
 
 Install Caddy from a supported package, then deploy `deploy/Caddyfile` (replace

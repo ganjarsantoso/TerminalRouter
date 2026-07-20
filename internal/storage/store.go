@@ -14,6 +14,16 @@ import (
 // Store is the SQLite-backed state store.
 type Store struct {
 	db *sql.DB
+	// PriceFunc computes the USD cost for a resolved provider/model and token
+	// counts. It is set from configuration at startup and used by
+	// UsageForKeySince to price aggregated usage; a nil value means cost
+	// budgets cannot be enforced and unpriced routes must be rejected.
+	PriceFunc func(provider, model string, inTokens, outTokens int) (float64, bool)
+}
+
+// SetPricing wires the cost computation function used when aggregating usage.
+func (s *Store) SetPricing(f func(provider, model string, inTokens, outTokens int) (float64, bool)) {
+	s.PriceFunc = f
 }
 
 // Open opens (or creates) the router database in WAL mode and runs migrations.
@@ -93,6 +103,24 @@ func (s *Store) applyMigrations(fromVersion int) error {
 			}
 		}
 	}
+	if fromVersion < 8 {
+		for _, stmt := range migrationSQLv8 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					return fmt.Errorf("migrate to v8: %w", err)
+				}
+			}
+		}
+	}
+	if fromVersion < 9 {
+		for _, stmt := range migrationSQLv9 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					return fmt.Errorf("migrate to v9: %w", err)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -117,6 +145,8 @@ type ClientKey struct {
 	DailyEstimatedCostUSD *float64
 	MaxOutputTokens       *int
 	MaxRequestBody        *int64 // per-key request body size cap in bytes (nil = unlimited)
+	AllowDirectModels     bool   // whether the key may use provider/model direct syntax at all
+	AllowedDirectModels   []string // exact direct models allowed; empty with AllowDirectModels=true means unrestricted
 	ExpiresAt             *time.Time
 	Portable              bool
 	CreatedAt             time.Time
@@ -126,20 +156,24 @@ type ClientKey struct {
 
 const clientKeySelectCols = `id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm,
 	max_concurrent_requests, daily_request_limit, daily_input_tokens, daily_output_tokens,
-	daily_estimated_cost_usd, max_output_tokens, max_request_body, expires_at, portable, created_at, rotated_at, disabled_at`
+	daily_estimated_cost_usd, max_output_tokens, max_request_body, allow_direct_models, allowed_direct_models,
+	expires_at, portable, created_at, rotated_at, disabled_at`
 
 func (s *Store) InsertClientKey(ctx context.Context, k ClientKey) error {
 	aliases, _ := json.Marshal(k.AllowedAliases)
+	directModels, _ := json.Marshal(k.AllowedDirectModels)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO client_keys(
 			id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm,
 			max_concurrent_requests, daily_request_limit, daily_input_tokens, daily_output_tokens,
-			daily_estimated_cost_usd, max_output_tokens, max_request_body, expires_at, portable, created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			daily_estimated_cost_usd, max_output_tokens, max_request_body, allow_direct_models,
+			allowed_direct_models, expires_at, portable, created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		k.ID, k.Name, k.KeyPrefix, k.KeyHash, k.Salt, boolToInt(k.Enabled),
 		string(aliases), nullInt(k.RateLimitRPM), nullInt(k.MaxConcurrentRequests),
 		nullInt(k.DailyRequestLimit), nullInt64(k.DailyInputTokens), nullInt64(k.DailyOutputTokens),
 		nullFloat(k.DailyEstimatedCostUSD), nullInt(k.MaxOutputTokens), nullInt64(k.MaxRequestBody),
+		boolToInt(k.AllowDirectModels), string(directModels),
 		nullTime(k.ExpiresAt),
 		boolToInt(k.Portable), k.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -149,6 +183,7 @@ func (s *Store) InsertClientKey(ctx context.Context, k ClientKey) error {
 // UpdateClientKeyPolicy updates non-secret policy fields on a client key.
 func (s *Store) UpdateClientKeyPolicy(ctx context.Context, k ClientKey) error {
 	aliases, _ := json.Marshal(k.AllowedAliases)
+	directModels, _ := json.Marshal(k.AllowedDirectModels)
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE client_keys SET
 			name=?,
@@ -161,12 +196,15 @@ func (s *Store) UpdateClientKeyPolicy(ctx context.Context, k ClientKey) error {
 			daily_estimated_cost_usd=?,
 			max_output_tokens=?,
 			max_request_body=?,
+			allow_direct_models=?,
+			allowed_direct_models=?,
 			expires_at=?,
 			portable=?
 		WHERE id=?`,
 		k.Name, string(aliases), nullInt(k.RateLimitRPM), nullInt(k.MaxConcurrentRequests),
 		nullInt(k.DailyRequestLimit), nullInt64(k.DailyInputTokens), nullInt64(k.DailyOutputTokens),
-		nullFloat(k.DailyEstimatedCostUSD), nullInt(k.MaxOutputTokens), nullInt64(k.MaxRequestBody), nullTime(k.ExpiresAt),
+		nullFloat(k.DailyEstimatedCostUSD), nullInt(k.MaxOutputTokens), nullInt64(k.MaxRequestBody),
+		boolToInt(k.AllowDirectModels), string(directModels), nullTime(k.ExpiresAt),
 		boolToInt(k.Portable), k.ID,
 	)
 	if err != nil {
@@ -210,6 +248,29 @@ func (s *Store) GetClientKeyByID(ctx context.Context, id string) (*ClientKey, er
 
 func (s *Store) FindEnabledKeys(ctx context.Context) ([]ClientKey, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+clientKeySelectCols+` FROM client_keys WHERE enabled=1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ClientKey
+	for rows.Next() {
+		k, err := scanClientKey(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// FindEnabledKeysByPrefix returns enabled keys whose stored non-secret prefix
+// matches. This narrows the candidate set before expensive Argon2 verification.
+// The prefix is not a secret and prefix equality alone never authenticates.
+func (s *Store) FindEnabledKeysByPrefix(ctx context.Context, prefix string) ([]ClientKey, error) {
+	if prefix == "" {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+clientKeySelectCols+` FROM client_keys WHERE enabled=1 AND key_prefix=?`, prefix)
 	if err != nil {
 		return nil, err
 	}
@@ -271,8 +332,8 @@ type scannable interface {
 
 func scanClientKey(row scannable) (ClientKey, error) {
 	var k ClientKey
-	var enabled, portable int
-	var aliases sql.NullString
+	var enabled, portable, allowDirect int
+	var aliases, directModels sql.NullString
 	var rpm, maxConc, dailyReq, maxOut, maxBody sql.NullInt64
 	var dailyIn, dailyOut sql.NullInt64
 	var dailyCost sql.NullFloat64
@@ -280,7 +341,8 @@ func scanClientKey(row scannable) (ClientKey, error) {
 	var expires, rotated, disabled sql.NullString
 	err := row.Scan(
 		&k.ID, &k.Name, &k.KeyPrefix, &k.KeyHash, &k.Salt, &enabled, &aliases, &rpm,
-		&maxConc, &dailyReq, &dailyIn, &dailyOut, &dailyCost, &maxOut, &maxBody, &expires, &portable,
+		&maxConc, &dailyReq, &dailyIn, &dailyOut, &dailyCost, &maxOut, &maxBody,
+		&allowDirect, &directModels, &expires, &portable,
 		&created, &rotated, &disabled,
 	)
 	if err != nil {
@@ -288,8 +350,12 @@ func scanClientKey(row scannable) (ClientKey, error) {
 	}
 	k.Enabled = enabled == 1
 	k.Portable = portable == 1
+	k.AllowDirectModels = allowDirect == 1
 	if aliases.Valid && aliases.String != "" && aliases.String != "null" {
 		_ = json.Unmarshal([]byte(aliases.String), &k.AllowedAliases)
+	}
+	if directModels.Valid && directModels.String != "" && directModels.String != "null" {
+		_ = json.Unmarshal([]byte(directModels.String), &k.AllowedDirectModels)
 	}
 	k.RateLimitRPM = intPtrFromNull(rpm)
 	k.MaxConcurrentRequests = intPtrFromNull(maxConc)
@@ -336,10 +402,14 @@ type KeyUsageToday struct {
 	EstimatedUSD float64
 }
 
-// UsageForKeySince aggregates request_log rows for a client key.
+// UsageForKeySince aggregates request_log rows for a client key. Estimated cost
+// is computed from the configured pricing source using each row's resolved
+// provider/model; rows whose provider/model cannot be priced contribute zero to
+// the estimated cost (the unpriced route would already have been rejected at
+// admission for portable/public keys).
 func (s *Store) UsageForKeySince(ctx context.Context, keyID string, since time.Time) (*KeyUsageToday, error) {
 	rows, err := s.db.QueryContext(ctx, `
-		SELECT status_code, input_tokens, output_tokens
+		SELECT status_code, input_tokens, output_tokens, provider_id, upstream_model
 		FROM request_log
 		WHERE client_key_id = ? AND timestamp >= ?`,
 		keyID, since.UTC().Format(time.RFC3339Nano))
@@ -350,7 +420,8 @@ func (s *Store) UsageForKeySince(ctx context.Context, keyID string, since time.T
 	out := &KeyUsageToday{}
 	for rows.Next() {
 		var status, inTok, outTok sql.NullInt64
-		if err := rows.Scan(&status, &inTok, &outTok); err != nil {
+		var provider, model sql.NullString
+		if err := rows.Scan(&status, &inTok, &outTok, &provider, &model); err != nil {
 			return nil, err
 		}
 		out.Requests++
@@ -363,8 +434,11 @@ func (s *Store) UsageForKeySince(ctx context.Context, keyID string, since time.T
 			outN = outTok.Int64
 			out.OutputTokens += outN
 		}
-		// Same heuristic as Console activity: rough $/1M token estimate.
-		out.EstimatedUSD += float64(in)*0.000003 + float64(outN)*0.000015
+		if s.PriceFunc != nil && provider.Valid && model.Valid {
+			if cost, ok := s.PriceFunc(provider.String, model.String, int(in), int(outN)); ok {
+				out.EstimatedUSD += cost
+			}
+		}
 	}
 	return out, rows.Err()
 }
@@ -710,6 +784,26 @@ func (k ClientKey) AliasAllowed(alias string) bool {
 	alias = strings.ToLower(alias)
 	for _, a := range k.AllowedAliases {
 		if strings.ToLower(a) == alias {
+			return true
+		}
+	}
+	return false
+}
+
+// DirectModelAllowed returns true if the key may use a specific direct
+// provider/model string. It requires AllowDirectModels to be enabled. When the
+// allowlist is empty (and direct access is enabled) any direct model is allowed;
+// otherwise the model must match an entry exactly (case-insensitive, trimmed).
+func (k ClientKey) DirectModelAllowed(model string) bool {
+	if !k.AllowDirectModels {
+		return false
+	}
+	if len(k.AllowedDirectModels) == 0 {
+		return true
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	for _, m := range k.AllowedDirectModels {
+		if strings.ToLower(strings.TrimSpace(m)) == model {
 			return true
 		}
 	}

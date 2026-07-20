@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,6 +39,12 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			middleware.WriteError(w, r, normalization.NewError(normalization.ErrRequestTooLarge,
+				"request body exceeds the configured limit", 413))
+			return
+		}
 		middleware.WriteError(w, r, normalization.NewError(normalization.ErrInvalidRequest, "failed to read body", 400))
 		return
 	}
@@ -49,7 +56,8 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	nreq.ID = observability.RequestIDFrom(r.Context())
 
 	ck := middleware.ClientKeyFrom(r.Context())
-	if err := middleware.CheckAliasAllowed(ck, nreq.RequestedModel); err != nil {
+	isAlias := g.Resolver.IsAlias(nreq.RequestedModel)
+	if err := middleware.AuthorizeModel(ck, nreq.RequestedModel, isAlias, g.AllowDirect); err != nil {
 		if g.Log != nil {
 			g.Log.Warn("security_event",
 				"event", "forbidden_route",
@@ -100,11 +108,14 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	start := time.Now()
 	if nreq.Stream {
-		g.handleStream(w, r, nreq, plan, start)
+		g.handleStream(ctx, w, r, nreq, plan, start)
 		return
 	}
 
-	result, err := g.Coordinator.Execute(ctx, nreq, plan)
+	result, err := g.Coordinator.Execute(ctx, nreq, plan, execution.PolicyContext{
+		ClientKey:    middleware.ClientKeyFrom(ctx),
+		PublicHosting: g.Cfg.PublicHosting.Enabled,
+	})
 	lat := time.Since(start)
 	if err != nil {
 		ne := toNormErr(err)
@@ -116,13 +127,16 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	writeChatResponse(w, result.Response)
 }
 
-func (g *Gateway) handleStream(w http.ResponseWriter, r *http.Request, nreq *normalization.NormalizedRequest, plan *router.Plan, start time.Time) {
+func (g *Gateway) handleStream(ctx context.Context, w http.ResponseWriter, r *http.Request, nreq *normalization.NormalizedRequest, plan *router.Plan, start time.Time) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		middleware.WriteError(w, r, normalization.NewError(normalization.ErrInternal, "streaming not supported", 500))
 		return
 	}
-	sr, err := g.Coordinator.ExecuteStream(r.Context(), nreq, plan)
+	sr, err := g.Coordinator.ExecuteStream(ctx, nreq, plan, execution.PolicyContext{
+		ClientKey:    middleware.ClientKeyFrom(ctx),
+		PublicHosting: g.Cfg.PublicHosting.Enabled,
+	})
 	if err != nil {
 		ne := toNormErr(err)
 		g.logRequest(r, nreq, plan, "", 0, time.Since(start), ne, true)

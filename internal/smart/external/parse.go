@@ -146,6 +146,7 @@ func extractEvidence(id ModelIdentity, results []SearchResult) []EvidenceRecord 
 			out = append(out, EvidenceRecord{
 				Source:        p.source,
 				ModelIdentity: id.ID,
+				Published:     id,
 				Benchmark:     p.label,
 				Value:         val,
 				Scale:         p.scale,

@@ -16,6 +16,11 @@ ETC_DIR="/etc/termrouter"
 VAR_DIR="/var/lib/termrouter"
 LOG_DIR="/var/log/termrouter"
 SSH_PORT="${SSH_PORT:-22}"
+# Validate SSH_PORT is a numeric port; fall back to 22 if misconfigured so we
+# never emit a malformed ufw rule.
+case "$SSH_PORT" in
+  ''|*[!0-9]*) log "SSH_PORT must be numeric; falling back to 22"; SSH_PORT=22 ;;
+esac
 
 log() { printf '[setup] %s\n' "$*"; }
 

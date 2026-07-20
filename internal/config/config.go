@@ -25,6 +25,86 @@ type Config struct {
 	Summarizer    SummarizerConfig              `yaml:"summarizer,omitempty" json:"summarizer,omitempty"`
 	WebSearch     WebSearchConfig               `yaml:"web_search,omitempty" json:"web_search,omitempty"`
 	PublicHosting PublicHostingConfig           `yaml:"public_hosting,omitempty" json:"public_hosting,omitempty"`
+	Pricing       map[string]PriceConfig        `yaml:"pricing,omitempty" json:"pricing,omitempty"`
+}
+
+// PriceConfig describes the per-token cost for a specific provider/model (or a
+// whole provider when keyed by the provider id alone). Costs are expressed per
+// one million tokens. There is no built-in global default: enforcement of cost
+// budgets requires an explicit price for the resolved provider/model, otherwise
+// the request is treated as unpriced and rejected for portable/public keys.
+type PriceConfig struct {
+	InputUSDPerMillion       float64 `yaml:"input_usd_per_million" json:"input_usd_per_million"`
+	OutputUSDPerMillion      float64 `yaml:"output_usd_per_million" json:"output_usd_per_million"`
+	CachedInputUSDPerMillion float64 `yaml:"cached_input_usd_per_million,omitempty" json:"cached_input_usd_per_million,omitempty"`
+	// Currency is the billing currency for the rates. Only "usd" is supported.
+	Currency string `yaml:"currency,omitempty" json:"currency,omitempty"`
+}
+
+// Price is a resolved, validated pricing entry returned by LookupPrice.
+type Price struct {
+	InputUSDPerMillion  float64
+	OutputUSDPerMillion float64
+	// Source records which key matched: "provider/model", "provider", or "*".
+	Source string
+}
+
+// supportedPriceCurrency is the only currency accepted for rate entries.
+const supportedPriceCurrency = "usd"
+
+// LookupPrice returns the most specific valid pricing for the resolved
+// provider/model. ok is false when no entry matches, signalling that the route
+// is unpriced. An entry with explicit zero rates is still returned (ok=true):
+// a zero price is valid (e.g. a local model). Stored entries are guaranteed
+// valid by ValidatePricing, so any returned entry is trustworthy.
+func (c *Config) LookupPrice(provider, model string) (Price, bool) {
+	key := provider + "/" + model
+	if p, ok := c.Pricing[key]; ok {
+		return Price{InputUSDPerMillion: p.InputUSDPerMillion, OutputUSDPerMillion: p.OutputUSDPerMillion, Source: key}, true
+	}
+	if p, ok := c.Pricing[provider]; ok {
+		return Price{InputUSDPerMillion: p.InputUSDPerMillion, OutputUSDPerMillion: p.OutputUSDPerMillion, Source: provider}, true
+	}
+	if p, ok := c.Pricing["*"]; ok {
+		return Price{InputUSDPerMillion: p.InputUSDPerMillion, OutputUSDPerMillion: p.OutputUSDPerMillion, Source: "*"}, true
+	}
+	return Price{}, false
+}
+
+// ComputeCost returns the estimated USD cost for the given token counts at the
+// resolved provider/model. It delegates rate lookup to LookupPrice and is
+// responsible only for the arithmetic. The second return value is false when
+// no price entry matches (unpriced).
+func (c *Config) ComputeCost(provider, model string, inTokens, outTokens int) (float64, bool) {
+	pr, ok := c.LookupPrice(provider, model)
+	if !ok {
+		return 0, false
+	}
+	in := float64(inTokens) / 1_000_000 * pr.InputUSDPerMillion
+	out := float64(outTokens) / 1_000_000 * pr.OutputUSDPerMillion
+	return in + out, true
+}
+
+// ValidatePricing enforces that every pricing entry is well-formed: rates must
+// be present and non-negative, the currency must be supported (usd), and the
+// record must not be malformed. Explicit zero rates are valid.
+func (c *Config) ValidatePricing() error {
+	for key, p := range c.Pricing {
+		cur := strings.ToLower(strings.TrimSpace(p.Currency))
+		if cur == "" {
+			cur = supportedPriceCurrency
+		}
+		if cur != supportedPriceCurrency {
+			return fmt.Errorf("pricing %q: unsupported currency %q (only %q supported)", key, p.Currency, supportedPriceCurrency)
+		}
+		if p.InputUSDPerMillion < 0 {
+			return fmt.Errorf("pricing %q: input_usd_per_million must be >= 0", key)
+		}
+		if p.OutputUSDPerMillion < 0 {
+			return fmt.Errorf("pricing %q: output_usd_per_million must be >= 0", key)
+		}
+	}
+	return nil
 }
 
 // SummarizerConfig selects the model used to summarize fetched benchmark pages
@@ -160,12 +240,29 @@ type SmartLoggingConfig struct {
 	StorePrompt      *bool `yaml:"store_prompt,omitempty" json:"store_prompt,omitempty"`
 }
 
-// ModelProfileConfig is a user-defined or override model capability profile.
+// ModelProfileConfig stores layered, field-level capability baselines for a
+// single provider/model. Resolution merges layers per field with precedence:
+// user override > local assessment > external consensus > built-in (runtime).
+// Legacy flat profiles (top-level source/capabilities/properties) are migrated
+// into the correct baseline on Load via NormalizeProfiles.
 type ModelProfileConfig struct {
-	Source       string             `yaml:"source,omitempty" json:"source,omitempty"`
-	Version      string             `yaml:"version,omitempty" json:"version,omitempty"`
-	Capabilities map[string]float64 `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
-	Properties   ModelPropertiesConfig `yaml:"properties,omitempty" json:"properties,omitempty"`
+	ExternalBaseline   *ProfileBaseline `yaml:"external_baseline,omitempty" json:"external_baseline,omitempty"`
+	AssessmentBaseline *ProfileBaseline `yaml:"assessment_baseline,omitempty" json:"assessment_baseline,omitempty"`
+	UserOverrides      *ProfileBaseline `yaml:"user_overrides,omitempty" json:"user_overrides,omitempty"`
+
+	// Legacy flat fields (transient; migrated on Normalize). Not authoritative.
+	Source       string             `yaml:"source,omitempty" json:"-"`
+	Version      string             `yaml:"version,omitempty" json:"-"`
+	Capabilities map[string]float64 `yaml:"capabilities,omitempty" json:"-"`
+	Properties   ModelPropertiesConfig `yaml:"properties,omitempty" json:"-"`
+}
+
+// ProfileBaseline is one provenance layer of a model profile.
+type ProfileBaseline struct {
+	Version      string                `yaml:"version,omitempty" json:"version,omitempty"`
+	Capabilities map[string]float64    `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Confidence   map[string]float64    `yaml:"confidence,omitempty" json:"confidence,omitempty"`
+	Properties   *ModelPropertiesConfig `yaml:"properties,omitempty" json:"properties,omitempty"`
 }
 
 type ModelPropertiesConfig struct {
@@ -290,6 +387,7 @@ func Load(path string) (*Config, error) {
 	if err := yaml.Unmarshal(data, cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
 	}
+	cfg.NormalizeProfiles()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -315,6 +413,50 @@ func Save(path string, cfg *Config) error {
 // Addr returns host:port for the server.
 func (c *Config) Addr() string {
 	return fmt.Sprintf("%s:%d", c.Server.Host, c.Server.Port)
+}
+
+// NormalizeProfiles migrates legacy flat model_profiles into layered baselines.
+// It is idempotent: already-layered profiles (any baseline set) are left intact,
+// and legacy fields are cleared after migration so they are not re-serialized.
+func (c *Config) NormalizeProfiles() {
+	if c.ModelProfiles == nil {
+		return
+	}
+	for id, mp := range c.ModelProfiles {
+		// Already layered: trust the baselines.
+		if mp.ExternalBaseline != nil || mp.AssessmentBaseline != nil || mp.UserOverrides != nil {
+			// Clear transient legacy fields to avoid duplicate serialization.
+			mp.Source, mp.Version, mp.Capabilities, mp.Properties = "", "", nil, ModelPropertiesConfig{}
+			c.ModelProfiles[id] = mp
+			continue
+		}
+		// Legacy flat profile: migrate based on declared source.
+		if len(mp.Capabilities) == 0 && mp.Properties == (ModelPropertiesConfig{}) && mp.Source == "" && mp.Version == "" {
+			continue
+		}
+		var target **ProfileBaseline
+		switch mp.Source {
+		case "external-consensus", "external":
+			target = &mp.ExternalBaseline
+		case "self-assessment", "assessment":
+			target = &mp.AssessmentBaseline
+		default:
+			// user override, builtin, unknown/empty -> user overrides
+			// (built-in catalog is resolved at runtime; persisted legacy
+			// profiles are treated as user overrides per compatibility rule).
+			target = &mp.UserOverrides
+		}
+		bl := &ProfileBaseline{
+			Version:      mp.Version,
+			Capabilities: mp.Capabilities,
+			Properties:   &ModelPropertiesConfig{},
+		}
+		*bl.Properties = mp.Properties
+		*target = bl
+		// Clear legacy fields.
+		mp.Source, mp.Version, mp.Capabilities, mp.Properties = "", "", nil, ModelPropertiesConfig{}
+		c.ModelProfiles[id] = mp
+	}
 }
 
 // Validate checks configuration integrity (Appendix C).
@@ -346,9 +488,11 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("public_hosting.external_url must use https:// when set")
 			}
 		}
-		// Public hosting assumes loopback backend + reverse proxy; never bind openly without TLS.
-		if !isLoopbackHost(c.Server.Host) && !c.Server.InsecureRemote {
-			return fmt.Errorf("public_hosting.enabled requires server.host loopback (127.0.0.1) behind a reverse proxy")
+		// Public hosting assumes loopback backend + reverse proxy. TermRouter must
+		// always bind to loopback in this mode; no other setting (including
+		// insecure_remote) may override this. The reverse proxy is the public edge.
+		if !isLoopbackHost(c.Server.Host) {
+			return fmt.Errorf("public_hosting.enabled requires server.host to be loopback (127.0.0.1, ::1, or localhost) behind a reverse proxy; insecure_remote cannot override this")
 		}
 		if !c.Server.AuthRequired {
 			return fmt.Errorf("public_hosting.enabled requires server.auth_required: true")
@@ -448,24 +592,36 @@ func (c *Config) Validate() error {
 	}
 
 	for id, mp := range c.ModelProfiles {
-		for cap, v := range mp.Capabilities {
-			if v < 0 || v > 10 {
-				return fmt.Errorf("model_profiles %q: capability %q must be 0–10", id, cap)
+		baselines := []*ProfileBaseline{mp.ExternalBaseline, mp.AssessmentBaseline, mp.UserOverrides}
+		for _, bl := range baselines {
+			if bl == nil {
+				continue
+			}
+			for cap, v := range bl.Capabilities {
+				if v < 0 || v > 10 {
+					return fmt.Errorf("model_profiles %q: capability %q must be 0–10", id, cap)
+				}
+			}
+			if bl.Properties != nil {
+				if bl.Properties.CostTier < 0 || bl.Properties.CostTier > 5 {
+					return fmt.Errorf("model_profiles %q: cost_tier must be 0–5", id)
+				}
+				if bl.Properties.LatencyTier < 0 || bl.Properties.LatencyTier > 5 {
+					return fmt.Errorf("model_profiles %q: latency_tier must be 0–5", id)
+				}
+				if bl.Properties.Privacy != "" {
+					switch bl.Properties.Privacy {
+					case "local", "private-cloud", "cloud":
+					default:
+						return fmt.Errorf("model_profiles %q: privacy must be local, private-cloud, or cloud", id)
+					}
+				}
 			}
 		}
-		if mp.Properties.CostTier < 0 || mp.Properties.CostTier > 5 {
-			return fmt.Errorf("model_profiles %q: cost_tier must be 0–5", id)
-		}
-		if mp.Properties.LatencyTier < 0 || mp.Properties.LatencyTier > 5 {
-			return fmt.Errorf("model_profiles %q: latency_tier must be 0–5", id)
-		}
-		if mp.Properties.Privacy != "" {
-			switch mp.Properties.Privacy {
-			case "local", "private-cloud", "cloud":
-			default:
-				return fmt.Errorf("model_profiles %q: privacy must be local, private-cloud, or cloud", id)
-			}
-		}
+	}
+
+	if err := c.ValidatePricing(); err != nil {
+		return err
 	}
 
 	for name, a := range c.Aliases {

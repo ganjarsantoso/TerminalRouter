@@ -60,6 +60,9 @@ func keyToAPI(k storage.ClientKey) map[string]any {
 	if k.MaxOutputTokens != nil {
 		m["max_output_tokens"] = *k.MaxOutputTokens
 	}
+	if k.MaxRequestBody != nil {
+		m["max_request_body"] = *k.MaxRequestBody
+	}
 	if k.Portable {
 		m["warning"] = portableKeyWarning
 	}
@@ -77,6 +80,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		DailyOutputTokens     *int64   `json:"daily_output_tokens"`
 		DailyEstimatedCostUSD *float64 `json:"daily_estimated_cost_usd"`
 		MaxOutputTokens       *int     `json:"max_output_tokens"`
+		MaxRequestBody        *int64   `json:"max_request_body"`
 		Portable              bool     `json:"portable"`
 		ExpiresAt             string   `json:"expires_at"`
 	}
@@ -99,7 +103,7 @@ func (s *Server) handleCreateKey(w http.ResponseWriter, r *http.Request) {
 		RateLimitRPM: body.RateLimitRPM, MaxConcurrentRequests: body.MaxConcurrentRequests,
 		DailyRequestLimit: body.DailyRequestLimit, DailyInputTokens: body.DailyInputTokens,
 		DailyOutputTokens: body.DailyOutputTokens, DailyEstimatedCostUSD: body.DailyEstimatedCostUSD,
-		MaxOutputTokens: body.MaxOutputTokens, Portable: body.Portable,
+		MaxOutputTokens: body.MaxOutputTokens, MaxRequestBody: body.MaxRequestBody, Portable: body.Portable,
 	}
 	if body.ExpiresAt != "" {
 		t, err := time.Parse(time.RFC3339, body.ExpiresAt)

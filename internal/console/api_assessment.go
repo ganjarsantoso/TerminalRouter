@@ -18,10 +18,10 @@ func (s *Server) getAssessmentService() *smart.ModelAssessmentService {
 	if err != nil {
 		return nil
 	}
-	userProfiles, extProfiles := smart.SplitProfilesFromConfig(rc.Cfg)
+	userProfiles, assessmentProfiles, extProfiles := smart.SplitProfilesFromConfig(rc.Cfg)
 	ps := smart.NewProfileStoreWithAssessments(
 		userProfiles,
-		map[string]smart.ModelProfile{},
+		assessmentProfiles,
 		extProfiles,
 		true,
 	)
@@ -243,58 +243,59 @@ func (s *Server) handleApplyAssessmentProposal(w http.ResponseWriter, r *http.Re
 	if rec.ProposedProfile != nil {
 		key := smart.ProfileKey(rec.ProviderID, rec.ModelID)
 		accepted := body.AcceptedFields
-		preserve := body.PreserveUserOverrides
 		rev, mutErr := s.applyMutation("profile_assessment_apply", key, func(cfg *config.Config) error {
 			if cfg.ModelProfiles == nil {
 				cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
 			}
 			mp := cfg.ModelProfiles[key]
-			if mp.Capabilities == nil {
-				mp.Capabilities = map[string]float64{}
+			if mp.AssessmentBaseline == nil {
+				mp.AssessmentBaseline = &config.ProfileBaseline{}
+			}
+			bl := mp.AssessmentBaseline
+			bl.Version = rec.BenchmarkVersion
+			if bl.Capabilities == nil {
+				bl.Capabilities = map[string]float64{}
 			}
 			applyAll := len(accepted) == 0
 			for k, v := range rec.ProposedProfile.Capabilities {
 				if applyAll || containsString(accepted, k) {
-					if preserve && mp.Source == smart.SourceUser {
-						if _, exists := mp.Capabilities[k]; exists {
-							continue
-						}
-					}
-					mp.Capabilities[k] = v
+					bl.Capabilities[k] = v
 				}
 			}
-			if rec.ProposedProfile.Properties.ContextWindow > 0 {
-				mp.Properties.ContextWindow = rec.ProposedProfile.Properties.ContextWindow
+			if bl.Properties == nil {
+				bl.Properties = &config.ModelPropertiesConfig{}
 			}
-			if rec.ProposedProfile.Properties.MaxOutputTokens > 0 {
-				mp.Properties.MaxOutputTokens = rec.ProposedProfile.Properties.MaxOutputTokens
+			pp := rec.ProposedProfile.Properties
+			if pp.ContextWindow > 0 {
+				bl.Properties.ContextWindow = pp.ContextWindow
 			}
-			if rec.ProposedProfile.Properties.CostTier > 0 {
-				mp.Properties.CostTier = rec.ProposedProfile.Properties.CostTier
+			if pp.MaxOutputTokens > 0 {
+				bl.Properties.MaxOutputTokens = pp.MaxOutputTokens
 			}
-			if rec.ProposedProfile.Properties.LatencyTier > 0 {
-				mp.Properties.LatencyTier = rec.ProposedProfile.Properties.LatencyTier
+			if pp.CostTier > 0 {
+				bl.Properties.CostTier = pp.CostTier
 			}
-			if rec.ProposedProfile.Properties.Privacy != "" {
-				mp.Properties.Privacy = rec.ProposedProfile.Properties.Privacy
+			if pp.LatencyTier > 0 {
+				bl.Properties.LatencyTier = pp.LatencyTier
 			}
-			if rec.ProposedProfile.Properties.Vision != nil {
-				mp.Properties.Vision = rec.ProposedProfile.Properties.Vision
+			if pp.Privacy != "" {
+				bl.Properties.Privacy = pp.Privacy
 			}
-			if rec.ProposedProfile.Properties.Tools != nil {
-				mp.Properties.Tools = rec.ProposedProfile.Properties.Tools
+			if pp.Vision != nil {
+				bl.Properties.Vision = pp.Vision
 			}
-			if rec.ProposedProfile.Properties.ParallelTools != nil {
-				mp.Properties.ParallelTools = rec.ProposedProfile.Properties.ParallelTools
+			if pp.Tools != nil {
+				bl.Properties.Tools = pp.Tools
 			}
-			if rec.ProposedProfile.Properties.StructuredOutput != nil {
-				mp.Properties.StructuredOutput = rec.ProposedProfile.Properties.StructuredOutput
+			if pp.ParallelTools != nil {
+				bl.Properties.ParallelTools = pp.ParallelTools
 			}
-			if rec.ProposedProfile.Properties.Streaming != nil {
-				mp.Properties.Streaming = rec.ProposedProfile.Properties.Streaming
+			if pp.StructuredOutput != nil {
+				bl.Properties.StructuredOutput = pp.StructuredOutput
 			}
-			mp.Source = smart.SourceSelfAssess
-			mp.Version = rec.BenchmarkVersion
+			if pp.Streaming != nil {
+				bl.Properties.Streaming = pp.Streaming
+			}
 			cfg.ModelProfiles[key] = mp
 			return nil
 		})

@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"math/rand"
+	"sync"
 	"time"
 
+	"github.com/termrouter/termrouter/internal/config"
 	"github.com/termrouter/termrouter/internal/credentials"
 	"github.com/termrouter/termrouter/internal/normalization"
 	"github.com/termrouter/termrouter/internal/observability"
@@ -49,14 +51,50 @@ type Coordinator struct {
 	Creds    *credentials.Manager
 	Store    *storage.Store
 	Log      *observability.Logger
+	// Cfg provides pricing lookups for spend enforcement. May be nil when
+	// pricing is not configured (in which case cost budgets cannot be enforced
+	// and unpriced routes are rejected for portable/public keys).
+	Cfg *config.Config
+
+	mu       sync.Mutex
+	reserved map[string]*spendReservation
+}
+
+// PolicyContext carries the authenticated client key and deployment posture
+// into the execution boundary so the coordinator can perform authoritative
+// spend admission (per-route pricing + worst-case reservation + daily budget).
+type PolicyContext struct {
+	ClientKey    *storage.ClientKey
+	PublicHosting bool
+}
+
+// spendReservation tracks the not-yet-finalized worst-case estimated spend of
+// a single in-flight request. The Coordinator's reserved map holds the
+// accumulated total per client key; this per-request handle records only the
+// amount contributed by its own request so release subtracts the right value.
+type spendReservation struct {
+	keyID   string
+	costUSD float64
 }
 
 func New(reg *provider.Registry, creds *credentials.Manager, store *storage.Store, log *observability.Logger) *Coordinator {
-	return &Coordinator{Registry: reg, Creds: creds, Store: store, Log: log}
+	return &Coordinator{
+		Registry: reg,
+		Creds:    creds,
+		Store:    store,
+		Log:      log,
+		reserved: map[string]*spendReservation{},
+	}
 }
 
 // Execute runs a non-streaming request with fallback before any response is returned.
-func (c *Coordinator) Execute(ctx context.Context, req *normalization.NormalizedRequest, plan *router.Plan) (*Result, error) {
+func (c *Coordinator) Execute(ctx context.Context, req *normalization.NormalizedRequest, plan *router.Plan, policy PolicyContext) (*Result, error) {
+	resv, aerr := c.admit(ctx, req, plan, policy)
+	if aerr != nil {
+		return nil, aerr
+	}
+	defer c.releaseSpend(resv)
+
 	var lastErr error
 	var fallbackReason string
 	max := defaultMaxAttempts
@@ -148,7 +186,13 @@ func (c *Coordinator) Execute(ctx context.Context, req *normalization.Normalized
 // Stream opens a stream with pre-commit fallback. The caller must drive the stream;
 // if the stream fails before Commit, the caller should call Stream again is NOT supported —
 // instead ExecuteStream handles pre-commit fallback by peeking.
-func (c *Coordinator) ExecuteStream(ctx context.Context, req *normalization.NormalizedRequest, plan *router.Plan) (*StreamResult, error) {
+func (c *Coordinator) ExecuteStream(ctx context.Context, req *normalization.NormalizedRequest, plan *router.Plan, policy PolicyContext) (*StreamResult, error) {
+	resv, aerr := c.admit(ctx, req, plan, policy)
+	if aerr != nil {
+		return nil, aerr
+	}
+	defer c.releaseSpend(resv)
+
 	var lastErr error
 	var fallbackReason string
 	attemptNum := 0
@@ -218,6 +262,190 @@ func (c *Coordinator) ExecuteStream(ctx context.Context, req *normalization.Norm
 		return nil, ne
 	}
 	return nil, lastErr
+}
+
+// admit performs authoritative spend admission before any provider call:
+//  1. per-route pricing gate — every potentially-executable attempt must have a
+//     configured price; otherwise a spend-enforced portable/public key is
+//     rejected with ErrUnpriced (non-retryable, no fallback).
+//  2. worst-case reservation + daily budget check — sum of the maximum estimated
+//     cost over every attempt that could execute (covers fallback/retry) is
+//     reserved against the daily spend budget (completed usage + active
+//     reservations). Store-unavailable is fail-closed for portable/public keys.
+//
+// It returns a spend reservation to be released when the request completes.
+func (c *Coordinator) admit(ctx context.Context, req *normalization.NormalizedRequest, plan *router.Plan, policy PolicyContext) (*spendReservation, error) {
+	key := policy.ClientKey
+	if key == nil || c.Cfg == nil {
+		// No spend policy applies (e.g. Console Playground without a client key,
+		// or pricing unconfigured). The Limiter still enforces request limits.
+		return &spendReservation{}, nil
+	}
+	if key.DailyEstimatedCostUSD == nil || *key.DailyEstimatedCostUSD <= 0 {
+		return &spendReservation{}, nil
+	}
+	failClosed := key.Portable || policy.PublicHosting
+	if !failClosed {
+		// Local, non-portable key with a cost budget: documented policy is to
+		// fail open on pricing gaps; only portable/public keys are fail-closed.
+		return &spendReservation{}, nil
+	}
+
+	// 1. Per-route pricing gate across every executable attempt.
+	for _, att := range plan.Attempts {
+		if _, ok := c.Cfg.LookupPrice(att.ProviderID, att.Model); !ok {
+			c.logUnpriced(ctx, policy, plan, att.ProviderID, att.Model)
+			return nil, &normalization.Error{
+				Code:       normalization.ErrUnpriced,
+				Message:    "The selected route contains a provider/model without configured pricing.",
+				HTTPStatus: 402,
+				Retryable:  false,
+			}
+		}
+	}
+
+	// 2. Worst-case reservation over all potentially billable attempts.
+	estIn := estimateInputTokens(req)
+	maxOut := maxOutputTokens(req)
+	var worst float64
+	for _, att := range plan.Attempts {
+		if cost, ok := c.Cfg.ComputeCost(att.ProviderID, att.Model, estIn, maxOut); ok {
+			worst += cost
+		}
+	}
+
+	// Daily budget check: completed usage + active reservations + this request's
+	// worst-case must stay within budget.
+	dayStart := time.Date(time.Now().UTC().Year(), time.Now().UTC().Month(), time.Now().UTC().Day(), 0, 0, 0, 0, time.UTC)
+	if c.Store != nil {
+		usage, err := c.Store.UsageForKeySince(ctx, key.ID, dayStart)
+		if err != nil {
+			// Usage policy unreadable: fail closed for portable/public keys.
+			c.logSpendExceeded(ctx, policy, plan, worst)
+			return nil, &normalization.Error{
+				Code:       normalization.ErrQuotaUnavailable,
+				Message:    "usage policy is temporarily unavailable",
+				HTTPStatus: 503,
+				Retryable:  false,
+			}
+		}
+		reserved := c.currentReservedSpend(key.ID)
+		if usage.EstimatedUSD+reserved+worst >= *key.DailyEstimatedCostUSD {
+			c.logSpendExceeded(ctx, policy, plan, worst)
+			return nil, &normalization.Error{
+				Code:       normalization.ErrRateLimited,
+				Message:    "daily estimated-spend budget exceeded for this client key",
+				HTTPStatus: 429,
+				Retryable:  false,
+			}
+		}
+	}
+
+	resv := c.reserveSpend(key.ID, worst)
+	return resv, nil
+}
+
+// reserveSpend records an in-flight worst-case spend for the key and returns a
+// per-request handle carrying only this request's contribution.
+func (c *Coordinator) reserveSpend(keyID string, costUSD float64) *spendReservation {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur := c.reserved[keyID]
+	if cur == nil {
+		cur = &spendReservation{}
+		c.reserved[keyID] = cur
+	}
+	cur.costUSD += costUSD
+	return &spendReservation{keyID: keyID, costUSD: costUSD}
+}
+
+// releaseSpend removes a request's contribution once it completes.
+func (c *Coordinator) releaseSpend(resv *spendReservation) {
+	if resv == nil || resv.keyID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	cur, ok := c.reserved[resv.keyID]
+	if !ok {
+		return
+	}
+	cur.costUSD -= resv.costUSD
+	if cur.costUSD <= 0 {
+		delete(c.reserved, resv.keyID)
+	}
+}
+
+// currentReservedSpend returns the sum of active in-flight reservations for a key.
+func (c *Coordinator) currentReservedSpend(keyID string) float64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if cur, ok := c.reserved[keyID]; ok {
+		return cur.costUSD
+	}
+	return 0
+}
+
+// estimateInputTokens derives a conservative input-token estimate from the
+// normalized request when no provider tokenizer is available. It uses a
+// character-based approximation with a safety margin and is marked as an
+// estimate only.
+func estimateInputTokens(req *normalization.NormalizedRequest) int {
+	chars := len(req.System)
+	for _, m := range req.Messages {
+		chars += len(m.Content) + len(m.Role)*4
+	}
+	// ~3.3 chars/token baseline, with a 1.20 safety margin.
+	est := int(float64(chars) / 3.0 * 1.20)
+	if est < 1 {
+		est = 1
+	}
+	return est
+}
+
+// maxOutputTokens returns the requested maximum output tokens, or a conservative
+// default when the client did not specify one.
+func maxOutputTokens(req *normalization.NormalizedRequest) int {
+	if req.MaxOutputTokens != nil && *req.MaxOutputTokens > 0 {
+		return *req.MaxOutputTokens
+	}
+	return 4096
+}
+
+func (c *Coordinator) logUnpriced(ctx context.Context, policy PolicyContext, plan *router.Plan, providerID, model string) {
+	if c.Log == nil {
+		return
+	}
+	c.Log.Warn("security_event",
+		"event", "unpriced_route",
+		"request_id", observability.RequestIDFrom(ctx),
+		"client_key_id", clientKeyID(policy.ClientKey),
+		"public_alias", plan.PublicModel,
+		"route", plan.RouteName,
+		"unpriced_provider", providerID,
+		"unpriced_model", model,
+	)
+}
+
+func (c *Coordinator) logSpendExceeded(ctx context.Context, policy PolicyContext, plan *router.Plan, costUSD float64) {
+	if c.Log == nil {
+		return
+	}
+	c.Log.Warn("security_event",
+		"event", "daily_spend_budget_exceeded",
+		"request_id", observability.RequestIDFrom(ctx),
+		"client_key_id", clientKeyID(policy.ClientKey),
+		"public_alias", plan.PublicModel,
+		"route", plan.RouteName,
+		"estimated_cost_usd", costUSD,
+	)
+}
+
+func clientKeyID(k *storage.ClientKey) string {
+	if k == nil {
+		return ""
+	}
+	return k.ID
 }
 
 func (c *Coordinator) tryOnce(ctx context.Context, req *normalization.NormalizedRequest, att router.Attempt) (*normalization.NormalizedResponse, error) {

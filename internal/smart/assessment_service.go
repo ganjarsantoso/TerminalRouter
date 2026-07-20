@@ -222,7 +222,25 @@ func (s *ModelAssessmentService) Preflight(providerID, modelID string) *Assessme
 	}
 	s.mu.Unlock()
 
-	res.ProviderEnabled = true
+	// Provider enablement: only eligible if the provider is configured and
+	// enabled in the active config.
+	if s.cfg != nil {
+		if p, ok := s.cfg.Providers[providerID]; ok {
+			res.ProviderEnabled = p.IsEnabled()
+			if !res.ProviderEnabled {
+				res.Eligible = false
+				res.Reasons = append(res.Reasons, "provider disabled")
+			}
+		} else {
+			res.ProviderEnabled = false
+			res.Eligible = false
+			res.Reasons = append(res.Reasons, "provider not configured")
+		}
+	} else {
+		// Config unavailable (e.g. some unit tests): don't fail closed here;
+		// the credential/model checks below remain authoritative.
+		res.ProviderEnabled = true
+	}
 	res.CredentialAvailable = s.credChecker(providerID)
 
 	if !res.CredentialAvailable {
@@ -260,22 +278,43 @@ func (s *ModelAssessmentService) Estimate(providerID, modelID string, depth Asse
 		StreamingTests: true,
 	}
 
+	// Token budget per depth. Assessment prompts are input-heavy: we model
+	// ~70% input / ~30% output tokens so cost can use real input/output rates.
+	var perReq int
 	switch depth {
 	case DepthQuick:
 		est.RequestCount = 5 + len(categories)*3
-		est.EstimatedTokens = est.RequestCount * 2000
+		perReq = 2000
 	case DepthStandard:
 		est.RequestCount = 10 + len(categories)*5
-		est.EstimatedTokens = est.RequestCount * 3000
+		perReq = 3000
 	case DepthComprehensive:
 		est.RequestCount = 20 + len(categories)*8
-		est.EstimatedTokens = est.RequestCount * 4000
+		perReq = 4000
+	default:
+		est.RequestCount = 10 + len(categories)*5
+		perReq = 3000
 	}
+	est.EstimatedTokens = est.RequestCount * perReq
+	est.EstimatedInputTokens = int(float64(est.EstimatedTokens) * 0.7)
+	est.EstimatedOutputTokens = est.EstimatedTokens - est.EstimatedInputTokens
 
-	// Rough cost estimate (very approximate)
-	est.EstimatedCost = float64(est.EstimatedTokens) * 0.000002
-	if est.EstimatedCost > 0 {
-		est.CostKnown = true
+	// Cost estimate uses the same configured provider/model pricing as normal
+	// request accounting (cfg.ComputeCost -> LookupPrice). No pricing => no
+	// fabricated monetary value; the caller is told to configure pricing.
+	if s.cfg != nil {
+		if cost, ok := s.cfg.ComputeCost(providerID, modelID, est.EstimatedInputTokens, est.EstimatedOutputTokens); ok {
+			est.EstimatedCost = cost
+			est.CostKnown = true
+		} else {
+			est.CostKnown = false
+			est.Warnings = append(est.Warnings,
+				"pricing not configured for "+providerID+"/"+modelID+"; set config pricing to get a cost estimate")
+		}
+	} else {
+		// Config unavailable: cannot price; do not fabricate a value.
+		est.CostKnown = false
+		est.Warnings = append(est.Warnings, "pricing unavailable: config not loaded; configure pricing for a cost estimate")
 	}
 
 	return est
@@ -320,6 +359,16 @@ func (s *ModelAssessmentService) Start(providerID, modelID string, depth Assessm
 		}
 	}
 	rec.Categories = catResults
+
+	// Persist a cost estimate only when real pricing is configured; never
+	// fabricate a monetary value.
+	if s.cfg != nil {
+		inTok := int(float64(plan.MaxTokens) * 0.7)
+		outTok := plan.MaxTokens - inTok
+		if cost, ok := s.cfg.ComputeCost(providerID, modelID, inTok, outTok); ok {
+			rec.EstimatedCost = cost
+		}
+	}
 
 	if err := s.store.InsertAssessment(context.Background(), rec); err != nil {
 		return nil, fmt.Errorf("persist assessment: %w", err)
@@ -454,7 +503,7 @@ func (s *ModelAssessmentService) executeAssessment(ctx context.Context, assessme
 		}
 
 		start := time.Now()
-		result, execErr := s.coord.Execute(ctx, nreq, plan)
+		result, execErr := s.coord.Execute(ctx, nreq, plan, execution.PolicyContext{})
 		latency := time.Since(start)
 
 		score := 0.0
@@ -1015,38 +1064,14 @@ func (s *ModelAssessmentService) ApplyProposal(assessmentID string, acceptedFiel
 	}
 
 	finalProfile := *rec.ProposedProfile
-
-	if preserveUserOverrides {
-		if existing, ok := s.profiles.User[key]; ok {
-			for k, v := range existing.Capabilities {
-				finalProfile.Capabilities[k] = v
-			}
-			if existing.Properties.Vision != nil {
-				finalProfile.Properties.Vision = existing.Properties.Vision
-			}
-			if existing.Properties.Tools != nil {
-				finalProfile.Properties.Tools = existing.Properties.Tools
-			}
-			if existing.Properties.ParallelTools != nil {
-				finalProfile.Properties.ParallelTools = existing.Properties.ParallelTools
-			}
-			if existing.Properties.StructuredOutput != nil {
-				finalProfile.Properties.StructuredOutput = existing.Properties.StructuredOutput
-			}
-			if existing.Properties.ContextWindow > 0 {
-				finalProfile.Properties.ContextWindow = existing.Properties.ContextWindow
-			}
-			if existing.Properties.CostTier > 0 {
-				finalProfile.Properties.CostTier = existing.Properties.CostTier
-			}
-			if existing.Properties.LatencyTier > 0 {
-				finalProfile.Properties.LatencyTier = existing.Properties.LatencyTier
-			}
-			if existing.Properties.Privacy != "" {
-				finalProfile.Properties.Privacy = existing.Properties.Privacy
-			}
-		}
-	}
+	// Assessment application writes ONLY the assessment baseline. Per-field
+	// layered resolution already gives user overrides precedence at read time,
+	// so we must not copy user values into this layer (that would prevent a
+	// later reset of the user override from revealing the true baseline).
+	finalProfile.Source = SourceSelfAssess
+	finalProfile.ProviderID = rec.ProviderID
+	finalProfile.ModelID = rec.ModelID
+	finalProfile.ID = key
 
 	if !applyAll {
 		for k := range finalProfile.Capabilities {

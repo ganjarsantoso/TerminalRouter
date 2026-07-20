@@ -37,6 +37,14 @@ ai.example.com {
             roll_keep 5
             roll_keep_for 168h
         }
-        format json
+        # JSON access log by default includes request.headers (Authorization
+        # bearer token). Strip request headers so secrets are never logged.
+        # Response/request bodies are never logged by Caddy.
+        format filter {
+            wrap json
+            fields {
+                request.headers delete
+            }
+        }
     }
 }

@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/termrouter/termrouter/internal/config"
-	"github.com/termrouter/termrouter/internal/smart"
 	"github.com/termrouter/termrouter/internal/smart/external"
 )
 
@@ -134,27 +133,37 @@ func (s *Server) handleApplyExternalProposal(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// §18: proposals flagged for mandatory human review cannot be applied via
+	// the API. They must be reviewed and cleared (or edited) first.
+	if p.MandatoryReview {
+		writeError(w, http.StatusConflict, "mandatory_review", "proposal requires human sign-off before it can be applied")
+		return
+	}
+
 	caps, err := svc.ApplyProposal(p)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "apply_error", err.Error())
 		return
 	}
 
-	// Persist into config as an external-consensus profile (source precedence
-	// below any user override, below assessment; above builtin).
+	// Persist into config as an external-consensus baseline. This layer sits
+	// below user overrides and local assessment; it never overwrites them, and
+	// per-field resolution keeps higher layers' values for any shared field.
 	profileID := p.ProviderID + "/" + p.ModelID
 	rev, merr := s.applyMutation("external_profile_apply", profileID, func(cfg *config.Config) error {
 		if cfg.ModelProfiles == nil {
 			cfg.ModelProfiles = map[string]config.ModelProfileConfig{}
 		}
 		mp := cfg.ModelProfiles[profileID]
-		mp.Source = smart.SourceExternal
-		mp.Version = p.RegistryVersion
-		if mp.Capabilities == nil {
-			mp.Capabilities = map[string]float64{}
+		if mp.ExternalBaseline == nil {
+			mp.ExternalBaseline = &config.ProfileBaseline{}
+		}
+		mp.ExternalBaseline.Version = p.RegistryVersion
+		if mp.ExternalBaseline.Capabilities == nil {
+			mp.ExternalBaseline.Capabilities = map[string]float64{}
 		}
 		for k, v := range caps {
-			mp.Capabilities[k] = v
+			mp.ExternalBaseline.Capabilities[k] = v
 		}
 		cfg.ModelProfiles[profileID] = mp
 		return nil
