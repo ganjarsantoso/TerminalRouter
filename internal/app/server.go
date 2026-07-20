@@ -98,18 +98,36 @@ func (s *Server) rebuildHandler() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/ready", s.handleReady)
+	// /ready is exposed publicly only when explicitly enabled. When public_hosting
+	// is enabled and expose_ready is false, /ready returns 404 so it is never
+	// reachable through the reverse proxy and cannot leak provider/storage details.
+	if s.Cfg.PublicHosting.Enabled && !s.Cfg.PublicHosting.ExposeReady {
+		mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		})
+	} else {
+		mux.HandleFunc("/ready", s.handleReady)
+	}
 	mux.HandleFunc("/v1/models", oai.ListModels)
 	mux.HandleFunc("/v1/chat/completions", oai.ChatCompletions)
 	mux.HandleFunc("/v1/messages", ant.Messages)
 
 	maxSize, _ := config.ParseMaxRequestSize(s.Cfg.Server.MaxRequestSize)
-	auth := &middleware.Auth{Store: s.Store, AuthRequired: s.Cfg.Server.AuthRequired}
+	auth := &middleware.Auth{Store: s.Store, AuthRequired: s.Cfg.Server.AuthRequired, Log: s.Log}
+	limiter := middleware.NewLimiter(s.Store, s.Log)
+	proxyNets, _ := middleware.ParseTrustedProxies(s.Cfg.Server.TrustedProxies)
+	proxy := &middleware.TrustedProxy{Networks: proxyNets}
 
 	var h http.Handler = mux
 	h = s.trackActive(h)
+	h = limiter.Middleware(h)
 	h = auth.Middleware(h)
+	h = middleware.PerKeyBodyLimit()(h)
 	h = middleware.MaxBytes(maxSize)(h)
+	h = proxy.Middleware(h)
+	h = middleware.Recovery(h)
 	h = middleware.RequestID(h)
 	s.handler = h
 }

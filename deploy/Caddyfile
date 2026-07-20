@@ -1,0 +1,42 @@
+# TermRouter public reverse proxy (Caddy)
+#
+# Replace ai.example.com with the real domain. TermRouter itself binds to
+# 127.0.0.1:8787 (loopback only); Caddy is the only public listener.
+#
+# Do NOT proxy /admin/v1/* or the Web Console (127.0.0.1:8788). Only the
+# inference paths below are reachable from the internet.
+
+ai.example.com {
+    encode zstd gzip
+
+    @health path /health /ready
+    handle @health {
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    @inference path /v1/models /v1/chat/completions /v1/messages
+    handle @inference {
+        reverse_proxy 127.0.0.1:8787
+    }
+
+    handle {
+        respond "Not Found" 404
+    }
+
+    header {
+        -Server
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "no-referrer"
+        Strict-Transport-Security "max-age=31536000"
+        Cache-Control "no-store"
+    }
+
+    log {
+        output file /var/log/caddy/termrouter-access.log {
+            roll_size 10MiB
+            roll_keep 5
+            roll_keep_for 168h
+        }
+        format json
+    }
+}

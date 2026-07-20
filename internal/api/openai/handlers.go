@@ -48,12 +48,23 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	nreq.ID = observability.RequestIDFrom(r.Context())
 
-	if ck := middleware.ClientKeyFrom(r.Context()); ck != nil {
-		if !ck.AliasAllowed(nreq.RequestedModel) && !strings.Contains(nreq.RequestedModel, "/") {
-			middleware.WriteError(w, r, normalization.NewError(normalization.ErrPermissionDenied,
-				fmt.Sprintf("client key is not allowed to use model %q", nreq.RequestedModel), 403))
-			return
+	ck := middleware.ClientKeyFrom(r.Context())
+	if err := middleware.CheckAliasAllowed(ck, nreq.RequestedModel); err != nil {
+		if g.Log != nil {
+			g.Log.Warn("security_event",
+				"event", "forbidden_route",
+				"key_id", keyID(ck),
+				"model", nreq.RequestedModel,
+				"path", r.URL.Path,
+				"client_ip", middleware.ClientIPFrom(r.Context()),
+			)
 		}
+		middleware.WriteError(w, r, err)
+		return
+	}
+	if err := middleware.ApplyRequestPolicy(nreq, g.Cfg, ck); err != nil {
+		middleware.WriteError(w, r, err)
+		return
 	}
 
 	plan, err := g.Resolver.Resolve(nreq.RequestedModel, g.AllowDirect)
@@ -263,6 +274,12 @@ func (g *Gateway) logRequest(r *http.Request, nreq *normalization.NormalizedRequ
 	if ck := middleware.ClientKeyFrom(r.Context()); ck != nil {
 		ckID = ck.ID
 	}
+	clientLabel := middleware.ClientLabelFrom(r.Context())
+	if clientLabel == "" && nreq.Metadata != nil {
+		if v, ok := nreq.Metadata["termrouter_client_name"].(string); ok {
+			clientLabel = v
+		}
+	}
 	rec := storage.RequestRecord{
 		ID:              nreq.ID,
 		Timestamp:       time.Now().UTC(),
@@ -276,6 +293,7 @@ func (g *Gateway) logRequest(r *http.Request, nreq *normalization.NormalizedRequ
 		LatencyMs:       int(lat.Milliseconds()),
 		ErrorClass:      errClass,
 		Stream:          stream,
+		ClientLabel:     clientLabel,
 	}
 	if nreq.ID == "" {
 		rec.ID = observability.RequestIDFrom(r.Context())
@@ -294,6 +312,13 @@ func (g *Gateway) logRequest(r *http.Request, nreq *normalization.NormalizedRequ
 			"error_class", errClass,
 		)
 	}
+}
+
+func keyID(ck *storage.ClientKey) string {
+	if ck == nil {
+		return ""
+	}
+	return ck.ID
 }
 
 func writeChatResponse(w http.ResponseWriter, resp *normalization.NormalizedResponse) {

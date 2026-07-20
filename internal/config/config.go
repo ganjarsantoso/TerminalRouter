@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"regexp"
 	"strings"
@@ -14,15 +15,16 @@ var slugRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 // Config is the human-editable TermRouter configuration (no plaintext secrets).
 type Config struct {
-	Server        ServerConfig                `yaml:"server" json:"server"`
-	Credentials   CredentialsConfig           `yaml:"credentials" json:"credentials"`
-	Providers     map[string]ProviderConfig   `yaml:"providers" json:"providers"`
-	Routes        map[string]RouteConfig      `yaml:"routes" json:"routes"`
-	Aliases       map[string]AliasConfig      `yaml:"aliases" json:"aliases"`
+	Server        ServerConfig                  `yaml:"server" json:"server"`
+	Credentials   CredentialsConfig             `yaml:"credentials" json:"credentials"`
+	Providers     map[string]ProviderConfig     `yaml:"providers" json:"providers"`
+	Routes        map[string]RouteConfig        `yaml:"routes" json:"routes"`
+	Aliases       map[string]AliasConfig        `yaml:"aliases" json:"aliases"`
 	ModelProfiles map[string]ModelProfileConfig `yaml:"model_profiles,omitempty" json:"model_profiles,omitempty"`
-	Logging       LoggingConfig               `yaml:"logging" json:"logging"`
-	Summarizer    SummarizerConfig            `yaml:"summarizer,omitempty" json:"summarizer,omitempty"`
-	WebSearch     WebSearchConfig             `yaml:"web_search,omitempty" json:"web_search,omitempty"`
+	Logging       LoggingConfig                 `yaml:"logging" json:"logging"`
+	Summarizer    SummarizerConfig              `yaml:"summarizer,omitempty" json:"summarizer,omitempty"`
+	WebSearch     WebSearchConfig               `yaml:"web_search,omitempty" json:"web_search,omitempty"`
+	PublicHosting PublicHostingConfig           `yaml:"public_hosting,omitempty" json:"public_hosting,omitempty"`
 }
 
 // SummarizerConfig selects the model used to summarize fetched benchmark pages
@@ -35,30 +37,56 @@ type SummarizerConfig struct {
 
 // WebSearchConfig configures the live web-search backend used to gather
 // independent benchmark evidence. The defaults use DuckDuckGo's HTML endpoint,
-// which needs no API key. In environments behind a TLS-intercepting proxy, set
+// which needs no API key. In environments where DuckDuckGo is blocked (e.g.
+// country-level bans), set Endpoint to an alternative search URL and Method
+// accordingly. In environments behind a TLS-intercepting proxy, set
 // insecure_skip_verify (or a proxy) so the search can complete.
 type WebSearchConfig struct {
-	// Endpoint overrides the search URL (e.g. a proxy or alternative engine).
+	// Endpoint overrides the search URL (e.g. an alternative engine or proxy).
 	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
+	// Method is the HTTP method: "POST" (default, DuckDuckGo HTML native) or
+	// "GET". Some proxies reject one or the other.
+	Method string `yaml:"method,omitempty" json:"method,omitempty"`
 	// InsecureSkipVerify disables TLS certificate verification (use only behind
 	// a trusted TLS-intercepting proxy).
 	InsecureSkipVerify bool `yaml:"insecure_skip_verify,omitempty" json:"insecure_skip_verify,omitempty"`
 	// Proxy is an optional HTTP(S) proxy URL for all web-search traffic.
 	Proxy string `yaml:"proxy,omitempty" json:"proxy,omitempty"`
-	// TimeoutSeconds bounds each request (default 15).
+	// TimeoutSeconds bounds each request (default 30).
 	TimeoutSeconds int `yaml:"timeout_seconds,omitempty" json:"timeout_seconds,omitempty"`
+	// FallbackEndpoints are alternative search URLs tried (in order) if the
+	// primary Endpoint fails. Used when the default engine is blocked (e.g.
+	// country-level bans). These are infrastructure endpoints, not model data.
+	FallbackEndpoints []string `yaml:"fallback_endpoints,omitempty" json:"fallback_endpoints,omitempty"`
 }
 
 type ServerConfig struct {
-	Host            string        `yaml:"host" json:"host"`
-	Port            int           `yaml:"port" json:"port"`
-	AuthRequired    bool          `yaml:"auth_required" json:"auth_required"`
-	RequestTimeout  Duration      `yaml:"request_timeout" json:"request_timeout"`
-	MaxRequestSize  string        `yaml:"max_request_size" json:"max_request_size"`
-	MaxConcurrency  int           `yaml:"max_concurrency" json:"max_concurrency"`
-	StrictMode      bool          `yaml:"strict_mode" json:"strict_mode"`
-	InsecureRemote  bool          `yaml:"insecure_remote" json:"insecure_remote"`
-	AllowDirectModel bool         `yaml:"allow_direct_model" json:"allow_direct_model"`
+	Host             string   `yaml:"host" json:"host"`
+	Port             int      `yaml:"port" json:"port"`
+	AuthRequired     bool     `yaml:"auth_required" json:"auth_required"`
+	RequestTimeout   Duration `yaml:"request_timeout" json:"request_timeout"`
+	MaxRequestSize   string   `yaml:"max_request_size" json:"max_request_size"`
+	MaxConcurrency   int      `yaml:"max_concurrency" json:"max_concurrency"`
+	MaxMessages      int      `yaml:"max_messages,omitempty" json:"max_messages,omitempty"`
+	MaxTools         int      `yaml:"max_tools,omitempty" json:"max_tools,omitempty"`
+	StrictMode       bool     `yaml:"strict_mode" json:"strict_mode"`
+	InsecureRemote   bool     `yaml:"insecure_remote" json:"insecure_remote"`
+	AllowDirectModel bool     `yaml:"allow_direct_model" json:"allow_direct_model"`
+	// TrustedProxies are CIDRs whose X-Forwarded-For / X-Real-IP headers are trusted.
+	// Only configure when TermRouter sits behind a reverse proxy on a private path
+	// (e.g. 127.0.0.1/32 for local Caddy). Never leave empty and trust arbitrary headers.
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty" json:"trusted_proxies,omitempty"`
+}
+
+// PublicHostingConfig documents and validates a public VPS reverse-proxy deployment.
+// TermRouter itself still binds to loopback; Caddy (or equivalent) is the public edge.
+type PublicHostingConfig struct {
+	Enabled      bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	ExternalURL  string `yaml:"external_url,omitempty" json:"external_url,omitempty"`
+	ExposeHealth bool   `yaml:"expose_health,omitempty" json:"expose_health,omitempty"`
+	ExposeReady  bool   `yaml:"expose_ready,omitempty" json:"expose_ready,omitempty"`
+	// ConsolePublic must remain false. The management Console is loopback-only.
+	ConsolePublic bool `yaml:"console_public,omitempty" json:"console_public,omitempty"`
 }
 
 type CredentialsConfig struct {
@@ -228,7 +256,11 @@ func Default() *Config {
 			RequestTimeout: Duration(180 * time.Second),
 			MaxRequestSize: "20MiB",
 			MaxConcurrency: 64,
+			MaxMessages:    200,
+			MaxTools:       64,
 			StrictMode:     true,
+			// Trust only the local reverse proxy by default (Caddy on loopback).
+			TrustedProxies: []string{"127.0.0.1/32", "::1/128"},
 		},
 		Credentials:   CredentialsConfig{Backend: "vault"},
 		Providers:     map[string]ProviderConfig{},
@@ -239,6 +271,11 @@ func Default() *Config {
 			Level:         "info",
 			Payloads:      "metadata-only",
 			RetentionDays: 14,
+		},
+		PublicHosting: PublicHostingConfig{
+			ExposeHealth:  true,
+			ExposeReady:   false,
+			ConsolePublic: false,
 		},
 	}
 }
@@ -287,6 +324,35 @@ func (c *Config) Validate() error {
 	}
 	if c.Server.Host == "" {
 		return fmt.Errorf("server.host is required")
+	}
+	if c.Server.MaxMessages < 0 {
+		return fmt.Errorf("server.max_messages must be >= 0")
+	}
+	if c.Server.MaxTools < 0 {
+		return fmt.Errorf("server.max_tools must be >= 0")
+	}
+	for _, cidr := range c.Server.TrustedProxies {
+		if _, _, err := parseCIDROrIP(cidr); err != nil {
+			return fmt.Errorf("server.trusted_proxies: invalid entry %q: %w", cidr, err)
+		}
+	}
+	if c.PublicHosting.ConsolePublic {
+		return fmt.Errorf("public_hosting.console_public must be false; the Console is loopback-only and must not be exposed publicly")
+	}
+	if c.PublicHosting.Enabled {
+		if c.PublicHosting.ExternalURL != "" {
+			u := strings.TrimSpace(c.PublicHosting.ExternalURL)
+			if !strings.HasPrefix(u, "https://") {
+				return fmt.Errorf("public_hosting.external_url must use https:// when set")
+			}
+		}
+		// Public hosting assumes loopback backend + reverse proxy; never bind openly without TLS.
+		if !isLoopbackHost(c.Server.Host) && !c.Server.InsecureRemote {
+			return fmt.Errorf("public_hosting.enabled requires server.host loopback (127.0.0.1) behind a reverse proxy")
+		}
+		if !c.Server.AuthRequired {
+			return fmt.Errorf("public_hosting.enabled requires server.auth_required: true")
+		}
 	}
 	backend := strings.ToLower(c.Credentials.Backend)
 	switch backend {
@@ -434,6 +500,38 @@ func validateCredRef(ref string) error {
 		return fmt.Errorf("credential_ref must use keyring://, vault://, env://, or none://")
 	}
 	return nil
+}
+
+// parseCIDROrIP accepts "127.0.0.1/32", "10.0.0.0/8", or a bare IP (treated as /32 or /128).
+func parseCIDROrIP(s string) (network string, bits int, err error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", 0, fmt.Errorf("empty")
+	}
+	if strings.Contains(s, "/") {
+		_, n, e := net.ParseCIDR(s)
+		if e != nil {
+			return "", 0, e
+		}
+		ones, _ := n.Mask.Size()
+		return n.IP.String(), ones, nil
+	}
+	ip := net.ParseIP(s)
+	if ip == nil {
+		return "", 0, fmt.Errorf("not an IP or CIDR")
+	}
+	if ip.To4() != nil {
+		return ip.String(), 32, nil
+	}
+	return ip.String(), 128, nil
+}
+
+func isLoopbackHost(host string) bool {
+	if host == "127.0.0.1" || host == "::1" || host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // ExportSanitized returns a copy safe for export (credential refs redacted to scheme only).

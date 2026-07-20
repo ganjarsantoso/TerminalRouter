@@ -23,6 +23,21 @@ func DefaultSearcher() Searcher {
 	return NewWebSearcher(config.WebSearchConfig{})
 }
 
+// defaultFallbackEndpoints are public SearXNG instances tried (in order) when
+// the primary endpoint fails. They are infrastructure alternatives, not model
+// data, and exist only so the feature keeps working when the default engine is
+// blocked (e.g. country-level DuckDuckGo bans). These are not assumed to be
+// reachable from any given network; users can override via config.
+var defaultFallbackEndpoints = []string{
+	"https://searx.be/search",
+	"https://priv.au/search",
+	"https://search.inetol.net/search",
+	"https://baresearch.org/search",
+	"https://search.rhscz.eu/search",
+	"https://search.bus-hit.me/search",
+	"https://searx.tiekoetter.com/search",
+}
+
 // NewWebSearcher builds a WebSearcher from configuration. It honors a custom
 // endpoint, an optional proxy, and insecure_skip_verify (for TLS-intercepting
 // proxies). There is no hardcoded model or engine; the default endpoint is
@@ -50,8 +65,10 @@ func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
 		log.Printf("[external] web search TLS verification disabled (insecure_skip_verify); this is for TLS-intercepting proxies only")
 	}
 	return &WebSearcher{
-		Client:   &http.Client{Timeout: timeout, Transport: transport},
-		Endpoint: cfg.Endpoint,
+		Client:            &http.Client{Timeout: timeout, Transport: transport},
+		Endpoint:          cfg.Endpoint,
+		Method:            cfg.Method,
+		FallbackEndpoints: cfg.FallbackEndpoints,
 	}
 }
 
@@ -61,6 +78,10 @@ type WebSearcher struct {
 	Client *http.Client
 	// Endpoint is the search endpoint; defaults to DuckDuckGo HTML.
 	Endpoint string
+	// Method is the preferred HTTP method (POST or GET); GET is the fallback.
+	Method string
+	// FallbackEndpoints are alternative endpoints tried when the primary fails.
+	FallbackEndpoints []string
 }
 
 type ddgResult struct {
@@ -76,31 +97,55 @@ var ddgSnipRe = regexp.MustCompile(`<a[^>]+class="result__snippet"[^>]*>(.*?)</a
 // their pages and extracting benchmark-relevant lines. This yields far more
 // accurate figures than search snippets alone.
 //
-// The default DuckDuckGo HTML endpoint is queried with GET (some TLS-intercepting
-// proxies reject POST to that path with 405). If GET fails, a POST is attempted
-// as a fallback. A custom endpoint may be supplied via config.
+// The default method is POST (DuckDuckGo HTML native). If POST fails, GET is
+// attempted as a fallback. A custom endpoint and method may be supplied via
+// config (Method field); when set, that method is tried first.
+//
+// If the primary endpoint fails entirely (e.g. country-level block), the
+// searcher falls back to configured or built-in alternative endpoints so the
+// feature keeps working. Each endpoint tries its primary method, then the
+// other method as a last resort.
 func (w *WebSearcher) Search(ctx context.Context, query string) ([]SearchResult, error) {
+	client := w.Client
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+
+	primary := http.MethodPost
+	secondary := http.MethodGet
+	if w.Method == http.MethodGet {
+		primary, secondary = http.MethodGet, http.MethodPost
+	}
+
 	endpoint := w.Endpoint
 	if endpoint == "" {
 		endpoint = "https://html.duckduckgo.com/html/"
 	}
-	client := w.Client
-	if client == nil {
-		client = &http.Client{Timeout: 15 * time.Second}
+
+	endpoints := []string{endpoint}
+	if w.FallbackEndpoints != nil {
+		endpoints = append(endpoints, w.FallbackEndpoints...)
+	} else if w.Endpoint == "" {
+		endpoints = append(endpoints, defaultFallbackEndpoints...)
 	}
 
-	results, err := w.searchOnce(ctx, client, endpoint, query, http.MethodGet)
-	if err != nil {
-		// Retry with POST (DuckDuckGo's native method) in case GET was blocked.
-		if r2, err2 := w.searchOnce(ctx, client, endpoint, query, http.MethodPost); err2 == nil {
-			results = r2
-			err = nil
+	var lastErr error
+	for _, ep := range endpoints {
+		results, err := w.searchOnce(ctx, client, ep, query, primary)
+		if err != nil {
+			if r2, err2 := w.searchOnce(ctx, client, ep, query, secondary); err2 == nil {
+				return r2, nil
+			}
+			lastErr = err
+			continue
 		}
+		return results, nil
 	}
-	if err != nil {
-		return nil, err
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no search endpoint configured")
 	}
-	return results, nil
+	log.Printf("[external] web search all endpoints failed: %v", lastErr)
+	return nil, fmt.Errorf("all search endpoints failed: %w", lastErr)
 }
 
 // isTransient reports whether an error is worth retrying (proxy dropped the

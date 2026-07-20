@@ -62,8 +62,35 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("database schema version %d is newer than this binary (%d)", ver, currentSchemaVersion)
 	}
 	if ver < currentSchemaVersion {
+		if err := s.applyMigrations(ver); err != nil {
+			return err
+		}
 		if _, err := s.db.Exec(`UPDATE schema_version SET version = ?`, currentSchemaVersion); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// applyMigrations runs incremental upgrades from fromVersion exclusive to currentSchemaVersion.
+func (s *Store) applyMigrations(fromVersion int) error {
+	if fromVersion < 6 {
+		for _, stmt := range migrationSQLv6 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				// Ignore "duplicate column" on partially upgraded databases.
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					return fmt.Errorf("migrate to v6: %w", err)
+				}
+			}
+		}
+	}
+	if fromVersion < 7 {
+		for _, stmt := range migrationSQLv7 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					return fmt.Errorf("migrate to v7: %w", err)
+				}
+			}
 		}
 	}
 	return nil
@@ -75,38 +102,85 @@ func (s *Store) DB() *sql.DB { return s.db }
 // --- Client keys ---
 
 type ClientKey struct {
-	ID             string
-	Name           string
-	KeyPrefix      string
-	KeyHash        string
-	Salt           string
-	Enabled        bool
-	AllowedAliases []string
-	RateLimitRPM   *int
-	CreatedAt      time.Time
-	RotatedAt      *time.Time
-	DisabledAt     *time.Time
+	ID                    string
+	Name                  string
+	KeyPrefix             string
+	KeyHash               string
+	Salt                  string
+	Enabled               bool
+	AllowedAliases        []string
+	RateLimitRPM          *int
+	MaxConcurrentRequests *int
+	DailyRequestLimit     *int
+	DailyInputTokens      *int64
+	DailyOutputTokens     *int64
+	DailyEstimatedCostUSD *float64
+	MaxOutputTokens       *int
+	MaxRequestBody        *int64 // per-key request body size cap in bytes (nil = unlimited)
+	ExpiresAt             *time.Time
+	Portable              bool
+	CreatedAt             time.Time
+	RotatedAt             *time.Time
+	DisabledAt            *time.Time
 }
+
+const clientKeySelectCols = `id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm,
+	max_concurrent_requests, daily_request_limit, daily_input_tokens, daily_output_tokens,
+	daily_estimated_cost_usd, max_output_tokens, max_request_body, expires_at, portable, created_at, rotated_at, disabled_at`
 
 func (s *Store) InsertClientKey(ctx context.Context, k ClientKey) error {
 	aliases, _ := json.Marshal(k.AllowedAliases)
-	var rpm any
-	if k.RateLimitRPM != nil {
-		rpm = *k.RateLimitRPM
-	}
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO client_keys(id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm, created_at)
-		VALUES(?,?,?,?,?,?,?,?,?)`,
+		INSERT INTO client_keys(
+			id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm,
+			max_concurrent_requests, daily_request_limit, daily_input_tokens, daily_output_tokens,
+			daily_estimated_cost_usd, max_output_tokens, max_request_body, expires_at, portable, created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		k.ID, k.Name, k.KeyPrefix, k.KeyHash, k.Salt, boolToInt(k.Enabled),
-		string(aliases), rpm, k.CreatedAt.UTC().Format(time.RFC3339Nano),
+		string(aliases), nullInt(k.RateLimitRPM), nullInt(k.MaxConcurrentRequests),
+		nullInt(k.DailyRequestLimit), nullInt64(k.DailyInputTokens), nullInt64(k.DailyOutputTokens),
+		nullFloat(k.DailyEstimatedCostUSD), nullInt(k.MaxOutputTokens), nullInt64(k.MaxRequestBody),
+		nullTime(k.ExpiresAt),
+		boolToInt(k.Portable), k.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	return err
 }
 
+// UpdateClientKeyPolicy updates non-secret policy fields on a client key.
+func (s *Store) UpdateClientKeyPolicy(ctx context.Context, k ClientKey) error {
+	aliases, _ := json.Marshal(k.AllowedAliases)
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE client_keys SET
+			name=?,
+			allowed_aliases=?,
+			rate_limit_rpm=?,
+			max_concurrent_requests=?,
+			daily_request_limit=?,
+			daily_input_tokens=?,
+			daily_output_tokens=?,
+			daily_estimated_cost_usd=?,
+			max_output_tokens=?,
+			max_request_body=?,
+			expires_at=?,
+			portable=?
+		WHERE id=?`,
+		k.Name, string(aliases), nullInt(k.RateLimitRPM), nullInt(k.MaxConcurrentRequests),
+		nullInt(k.DailyRequestLimit), nullInt64(k.DailyInputTokens), nullInt64(k.DailyOutputTokens),
+		nullFloat(k.DailyEstimatedCostUSD), nullInt(k.MaxOutputTokens), nullInt64(k.MaxRequestBody), nullTime(k.ExpiresAt),
+		boolToInt(k.Portable), k.ID,
+	)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("client key %q not found", k.ID)
+	}
+	return nil
+}
+
 func (s *Store) ListClientKeys(ctx context.Context) ([]ClientKey, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm, created_at, rotated_at, disabled_at
-		FROM client_keys ORDER BY created_at`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+clientKeySelectCols+` FROM client_keys ORDER BY created_at`)
 	if err != nil {
 		return nil, err
 	}
@@ -123,9 +197,7 @@ func (s *Store) ListClientKeys(ctx context.Context) ([]ClientKey, error) {
 }
 
 func (s *Store) GetClientKeyByID(ctx context.Context, id string) (*ClientKey, error) {
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm, created_at, rotated_at, disabled_at
-		FROM client_keys WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+clientKeySelectCols+` FROM client_keys WHERE id=?`, id)
 	k, err := scanClientKey(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -137,9 +209,7 @@ func (s *Store) GetClientKeyByID(ctx context.Context, id string) (*ClientKey, er
 }
 
 func (s *Store) FindEnabledKeys(ctx context.Context) ([]ClientKey, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm, created_at, rotated_at, disabled_at
-		FROM client_keys WHERE enabled=1`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+clientKeySelectCols+` FROM client_keys WHERE enabled=1`)
 	if err != nil {
 		return nil, err
 	}
@@ -201,24 +271,47 @@ type scannable interface {
 
 func scanClientKey(row scannable) (ClientKey, error) {
 	var k ClientKey
-	var enabled int
+	var enabled, portable int
 	var aliases sql.NullString
-	var rpm sql.NullInt64
+	var rpm, maxConc, dailyReq, maxOut, maxBody sql.NullInt64
+	var dailyIn, dailyOut sql.NullInt64
+	var dailyCost sql.NullFloat64
 	var created string
-	var rotated, disabled sql.NullString
-	err := row.Scan(&k.ID, &k.Name, &k.KeyPrefix, &k.KeyHash, &k.Salt, &enabled, &aliases, &rpm, &created, &rotated, &disabled)
+	var expires, rotated, disabled sql.NullString
+	err := row.Scan(
+		&k.ID, &k.Name, &k.KeyPrefix, &k.KeyHash, &k.Salt, &enabled, &aliases, &rpm,
+		&maxConc, &dailyReq, &dailyIn, &dailyOut, &dailyCost, &maxOut, &maxBody, &expires, &portable,
+		&created, &rotated, &disabled,
+	)
 	if err != nil {
 		return k, err
 	}
 	k.Enabled = enabled == 1
+	k.Portable = portable == 1
 	if aliases.Valid && aliases.String != "" && aliases.String != "null" {
 		_ = json.Unmarshal([]byte(aliases.String), &k.AllowedAliases)
 	}
-	if rpm.Valid {
-		v := int(rpm.Int64)
-		k.RateLimitRPM = &v
+	k.RateLimitRPM = intPtrFromNull(rpm)
+	k.MaxConcurrentRequests = intPtrFromNull(maxConc)
+	k.DailyRequestLimit = intPtrFromNull(dailyReq)
+	k.DailyInputTokens = int64PtrFromNull(dailyIn)
+	k.DailyOutputTokens = int64PtrFromNull(dailyOut)
+	if dailyCost.Valid {
+		v := dailyCost.Float64
+		k.DailyEstimatedCostUSD = &v
 	}
+	k.MaxOutputTokens = intPtrFromNull(maxOut)
+	k.MaxRequestBody = int64PtrFromNull(maxBody)
 	k.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	if expires.Valid && expires.String != "" {
+		t, e := time.Parse(time.RFC3339Nano, expires.String)
+		if e != nil {
+			t, e = time.Parse(time.RFC3339, expires.String)
+		}
+		if e == nil {
+			k.ExpiresAt = &t
+		}
+	}
 	if rotated.Valid {
 		t, _ := time.Parse(time.RFC3339Nano, rotated.String)
 		k.RotatedAt = &t
@@ -228,6 +321,106 @@ func scanClientKey(row scannable) (ClientKey, error) {
 		k.DisabledAt = &t
 	}
 	return k, nil
+}
+
+// Expired reports whether the key is past its optional expiration.
+func (k ClientKey) Expired(now time.Time) bool {
+	return k.ExpiresAt != nil && !k.ExpiresAt.IsZero() && now.After(*k.ExpiresAt)
+}
+
+// KeyUsageToday is aggregate usage for a client key since midnight UTC.
+type KeyUsageToday struct {
+	Requests     int
+	InputTokens  int64
+	OutputTokens int64
+	EstimatedUSD float64
+}
+
+// UsageForKeySince aggregates request_log rows for a client key.
+func (s *Store) UsageForKeySince(ctx context.Context, keyID string, since time.Time) (*KeyUsageToday, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT status_code, input_tokens, output_tokens
+		FROM request_log
+		WHERE client_key_id = ? AND timestamp >= ?`,
+		keyID, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := &KeyUsageToday{}
+	for rows.Next() {
+		var status, inTok, outTok sql.NullInt64
+		if err := rows.Scan(&status, &inTok, &outTok); err != nil {
+			return nil, err
+		}
+		out.Requests++
+		var in, outN int64
+		if inTok.Valid {
+			in = inTok.Int64
+			out.InputTokens += in
+		}
+		if outTok.Valid {
+			outN = outTok.Int64
+			out.OutputTokens += outN
+		}
+		// Same heuristic as Console activity: rough $/1M token estimate.
+		out.EstimatedUSD += float64(in)*0.000003 + float64(outN)*0.000015
+	}
+	return out, rows.Err()
+}
+
+// CountRequestsForKeySince counts request_log rows for a key in a time window (for RPM checks).
+func (s *Store) CountRequestsForKeySince(ctx context.Context, keyID string, since time.Time) (int, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM request_log
+		WHERE client_key_id = ? AND timestamp >= ?`,
+		keyID, since.UTC().Format(time.RFC3339Nano)).Scan(&n)
+	return n, err
+}
+
+func intPtrFromNull(n sql.NullInt64) *int {
+	if !n.Valid {
+		return nil
+	}
+	v := int(n.Int64)
+	return &v
+}
+
+func int64PtrFromNull(n sql.NullInt64) *int64 {
+	if !n.Valid {
+		return nil
+	}
+	v := n.Int64
+	return &v
+}
+
+func nullInt(p *int) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func nullInt64(p *int64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func nullFloat(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func nullTime(t *time.Time) any {
+	if t == nil || t.IsZero() {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // --- Provider health ---
@@ -241,15 +434,15 @@ const (
 )
 
 type ProviderHealth struct {
-	ProviderID           string
-	CircuitState         CircuitState
-	ConsecutiveFailures  int
-	CooldownUntil        *time.Time
-	LastError            string
-	LastLatencyMs        int
-	LastSuccessAt        *time.Time
-	LastFailureAt        *time.Time
-	UpdatedAt            time.Time
+	ProviderID          string
+	CircuitState        CircuitState
+	ConsecutiveFailures int
+	CooldownUntil       *time.Time
+	LastError           string
+	LastLatencyMs       int
+	LastSuccessAt       *time.Time
+	LastFailureAt       *time.Time
+	UpdatedAt           time.Time
 }
 
 func (s *Store) GetProviderHealth(ctx context.Context, providerID string) (*ProviderHealth, error) {
@@ -375,30 +568,32 @@ type RequestRecord struct {
 	UsageSource        string
 	ErrorClass         string
 	Stream             bool
+	ClientLabel        string
 }
 
 func (s *Store) InsertRequest(ctx context.Context, r RequestRecord) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO request_log(id, timestamp, client_key_id, inbound_protocol, requested_model, resolved_alias,
 			provider_id, upstream_model, attempt, fallback_reason, status_code, latency_ms, time_to_first_token_ms,
-			input_tokens, output_tokens, usage_source, error_class, stream)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			input_tokens, output_tokens, usage_source, error_class, stream, client_label)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.Timestamp.UTC().Format(time.RFC3339Nano), nullStr(r.ClientKeyID), r.InboundProtocol,
 		r.RequestedModel, nullStr(r.ResolvedAlias), nullStr(r.ProviderID), nullStr(r.UpstreamModel),
 		r.Attempt, nullStr(r.FallbackReason), r.StatusCode, r.LatencyMs, r.TimeToFirstTokenMs,
 		r.InputTokens, r.OutputTokens, nullStr(r.UsageSource), nullStr(r.ErrorClass), boolToInt(r.Stream),
+		nullStr(r.ClientLabel),
 	)
 	return err
 }
 
 type UsageSummary struct {
-	TotalRequests  int
-	SuccessCount   int
-	ErrorCount     int
-	InputTokens    int64
-	OutputTokens   int64
-	AvgLatencyMs   float64
-	ByProvider     map[string]int
+	TotalRequests int
+	SuccessCount  int
+	ErrorCount    int
+	InputTokens   int64
+	OutputTokens  int64
+	AvgLatencyMs  float64
+	ByProvider    map[string]int
 }
 
 func (s *Store) UsageSince(ctx context.Context, since time.Time) (*UsageSummary, error) {
@@ -447,7 +642,7 @@ func (s *Store) UsageSince(ctx context.Context, since time.Time) (*UsageSummary,
 func (s *Store) RecentRequests(ctx context.Context, limit int, errorsOnly bool) ([]RequestRecord, error) {
 	q := `SELECT id, timestamp, client_key_id, inbound_protocol, requested_model, resolved_alias,
 		provider_id, upstream_model, attempt, fallback_reason, status_code, latency_ms, time_to_first_token_ms,
-		input_tokens, output_tokens, usage_source, error_class, stream
+		input_tokens, output_tokens, usage_source, error_class, stream, client_label
 		FROM request_log`
 	if errorsOnly {
 		q += ` WHERE status_code >= 400 OR error_class IS NOT NULL AND error_class != ''`
@@ -462,11 +657,11 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, errorsOnly bool) 
 	for rows.Next() {
 		var r RequestRecord
 		var ts string
-		var clientKey, alias, provider, model, fb, usage, errClass sql.NullString
+		var clientKey, alias, provider, model, fb, usage, errClass, clientLabel sql.NullString
 		var stream int
 		if err := rows.Scan(&r.ID, &ts, &clientKey, &r.InboundProtocol, &r.RequestedModel, &alias,
 			&provider, &model, &r.Attempt, &fb, &r.StatusCode, &r.LatencyMs, &r.TimeToFirstTokenMs,
-			&r.InputTokens, &r.OutputTokens, &usage, &errClass, &stream); err != nil {
+			&r.InputTokens, &r.OutputTokens, &usage, &errClass, &stream, &clientLabel); err != nil {
 			return nil, err
 		}
 		r.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
@@ -478,6 +673,7 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, errorsOnly bool) 
 		r.UsageSource = usage.String
 		r.ErrorClass = errClass.String
 		r.Stream = stream == 1
+		r.ClientLabel = clientLabel.String
 		out = append(out, r)
 	}
 	return out, rows.Err()
@@ -614,11 +810,11 @@ func (s *Store) GetSmartDecision(ctx context.Context, requestID string) (*SmartD
 
 // SmartShadowAggregate is a simple aggregate for shadow reports.
 type SmartShadowAggregate struct {
-	Total             int
-	ByTaskType        map[string]int
-	ByRecommendation  map[string]int
-	UncertainCount    int
-	MatchActualCount  int // when shadow rec equals actual provider/model (if known)
+	Total            int
+	ByTaskType       map[string]int
+	ByRecommendation map[string]int
+	UncertainCount   int
+	MatchActualCount int // when shadow rec equals actual provider/model (if known)
 }
 
 func (s *Store) SmartShadowStats(ctx context.Context, routeID string, since time.Time) (*SmartShadowAggregate, error) {

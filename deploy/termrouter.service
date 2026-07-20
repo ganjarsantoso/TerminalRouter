@@ -1,0 +1,30 @@
+[Unit]
+Description=TermRouter AI Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=termrouter
+Group=termrouter
+WorkingDirectory=/var/lib/termrouter
+EnvironmentFile=-/etc/termrouter/termrouter.env
+ExecStart=/opt/termrouter/termrouter serve --home /var/lib/termrouter
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+KillSignal=SIGTERM
+UMask=0027
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/termrouter /var/log/termrouter
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

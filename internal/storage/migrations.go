@@ -14,6 +14,15 @@ CREATE TABLE IF NOT EXISTS client_keys (
     enabled INTEGER NOT NULL DEFAULT 1,
     allowed_aliases TEXT, -- JSON array; empty/null = all
     rate_limit_rpm INTEGER,
+    max_concurrent_requests INTEGER,
+    daily_request_limit INTEGER,
+    daily_input_tokens INTEGER,
+    daily_output_tokens INTEGER,
+    daily_estimated_cost_usd REAL,
+    max_output_tokens INTEGER,
+    max_request_body INTEGER,
+    expires_at TEXT,
+    portable INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     rotated_at TEXT,
     disabled_at TEXT
@@ -49,7 +58,8 @@ CREATE TABLE IF NOT EXISTS request_log (
     output_tokens INTEGER,
     usage_source TEXT,
     error_class TEXT,
-    stream INTEGER NOT NULL DEFAULT 0
+    stream INTEGER NOT NULL DEFAULT 0,
+    client_label TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log(timestamp);
@@ -204,4 +214,24 @@ CREATE TABLE IF NOT EXISTS external_registry_versions (
 );
 `
 
-const currentSchemaVersion = 5
+const currentSchemaVersion = 7
+
+// migrationSQLv6 adds per-key public-hosting policy columns and client labels.
+// Applied for databases created before schema version 6 (CREATE IF NOT EXISTS
+// does not alter existing tables).
+var migrationSQLv6 = []string{
+	`ALTER TABLE client_keys ADD COLUMN max_concurrent_requests INTEGER`,
+	`ALTER TABLE client_keys ADD COLUMN daily_request_limit INTEGER`,
+	`ALTER TABLE client_keys ADD COLUMN daily_input_tokens INTEGER`,
+	`ALTER TABLE client_keys ADD COLUMN daily_output_tokens INTEGER`,
+	`ALTER TABLE client_keys ADD COLUMN daily_estimated_cost_usd REAL`,
+	`ALTER TABLE client_keys ADD COLUMN max_output_tokens INTEGER`,
+	`ALTER TABLE client_keys ADD COLUMN expires_at TEXT`,
+	`ALTER TABLE client_keys ADD COLUMN portable INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE request_log ADD COLUMN client_label TEXT`,
+}
+
+// migrationSQLv7 adds the per-key request body size cap.
+var migrationSQLv7 = []string{
+	`ALTER TABLE client_keys ADD COLUMN max_request_body INTEGER`,
+}

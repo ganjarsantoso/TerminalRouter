@@ -34,6 +34,7 @@ func (s *Server) handleActivity(w http.ResponseWriter, r *http.Request) {
 			"id":              rec.ID,
 			"timestamp":       rec.Timestamp.UTC().Format(time.RFC3339Nano),
 			"client_key_id":   rec.ClientKeyID,
+			"client_label":    rec.ClientLabel,
 			"protocol":        rec.InboundProtocol,
 			"requested_model": rec.RequestedModel,
 			"alias":           rec.ResolvedAlias,

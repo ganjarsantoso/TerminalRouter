@@ -38,6 +38,19 @@ func MaxBytes(n int64) func(http.Handler) http.Handler {
 	}
 }
 
+// Recovery catches panics from downstream handlers and returns a 500 instead
+// of letting the connection hang or leak a stack trace.
+func Recovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				writeAPIError(w, r, normalization.NewError(normalization.ErrInternal, "internal server error", 500))
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
 func writeAPIError(w http.ResponseWriter, r *http.Request, err *normalization.Error) {
 	if err == nil {
 		err = normalization.NewError(normalization.ErrInternal, "unknown error", 500)

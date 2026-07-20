@@ -56,21 +56,21 @@ type ToolChoice struct {
 
 // NormalizedRequest is the provider-neutral request representation.
 type NormalizedRequest struct {
-	ID                 string         `json:"id"`
-	RequestedModel     string         `json:"requested_model"`
-	ResolvedAlias      string         `json:"resolved_alias,omitempty"`
-	Messages           []Message      `json:"messages"`
-	Tools              []Tool         `json:"tools,omitempty"`
-	ToolChoice         *ToolChoice    `json:"tool_choice,omitempty"`
-	Temperature        *float64       `json:"temperature,omitempty"`
-	TopP               *float64       `json:"top_p,omitempty"`
-	MaxOutputTokens    *int           `json:"max_output_tokens,omitempty"`
-	StopSequences      []string       `json:"stop_sequences,omitempty"`
-	ResponseFormat     map[string]any `json:"response_format,omitempty"`
-	Stream             bool           `json:"stream"`
-	Metadata           map[string]any `json:"metadata,omitempty"`
-	ProviderOptions    map[string]any `json:"provider_options,omitempty"`
-	RequiredCapabilities []string     `json:"required_capabilities,omitempty"`
+	ID                   string         `json:"id"`
+	RequestedModel       string         `json:"requested_model"`
+	ResolvedAlias        string         `json:"resolved_alias,omitempty"`
+	Messages             []Message      `json:"messages"`
+	Tools                []Tool         `json:"tools,omitempty"`
+	ToolChoice           *ToolChoice    `json:"tool_choice,omitempty"`
+	Temperature          *float64       `json:"temperature,omitempty"`
+	TopP                 *float64       `json:"top_p,omitempty"`
+	MaxOutputTokens      *int           `json:"max_output_tokens,omitempty"`
+	StopSequences        []string       `json:"stop_sequences,omitempty"`
+	ResponseFormat       map[string]any `json:"response_format,omitempty"`
+	Stream               bool           `json:"stream"`
+	Metadata             map[string]any `json:"metadata,omitempty"`
+	ProviderOptions      map[string]any `json:"provider_options,omitempty"`
+	RequiredCapabilities []string       `json:"required_capabilities,omitempty"`
 	// System is extracted system text (also present in messages when needed).
 	System string `json:"system,omitempty"`
 }
@@ -79,12 +79,12 @@ type NormalizedRequest struct {
 type StopReason string
 
 const (
-	StopEndTurn      StopReason = "end_turn"
-	StopMaxTokens    StopReason = "max_tokens"
-	StopToolUse      StopReason = "tool_use"
-	StopBlocked      StopReason = "blocked"
-	StopSequence     StopReason = "stop_sequence"
-	StopError        StopReason = "error"
+	StopEndTurn   StopReason = "end_turn"
+	StopMaxTokens StopReason = "max_tokens"
+	StopToolUse   StopReason = "tool_use"
+	StopBlocked   StopReason = "blocked"
+	StopSequence  StopReason = "stop_sequence"
+	StopError     StopReason = "error"
 )
 
 // Usage holds token counts.
@@ -96,14 +96,14 @@ type Usage struct {
 
 // NormalizedResponse is a complete non-streaming response.
 type NormalizedResponse struct {
-	ID           string         `json:"id"`
-	Model        string         `json:"model"` // public model name
-	UpstreamModel string        `json:"upstream_model,omitempty"`
-	ProviderID   string         `json:"provider_id,omitempty"`
-	Content      []ContentBlock `json:"content"`
-	StopReason   StopReason     `json:"stop_reason"`
-	Usage        Usage          `json:"usage"`
-	Raw          map[string]any `json:"raw,omitempty"`
+	ID            string         `json:"id"`
+	Model         string         `json:"model"` // public model name
+	UpstreamModel string         `json:"upstream_model,omitempty"`
+	ProviderID    string         `json:"provider_id,omitempty"`
+	Content       []ContentBlock `json:"content"`
+	StopReason    StopReason     `json:"stop_reason"`
+	Usage         Usage          `json:"usage"`
+	Raw           map[string]any `json:"raw,omitempty"`
 }
 
 // EventType for streaming.
@@ -124,15 +124,15 @@ const (
 
 // StreamEvent is a normalized streaming event.
 type StreamEvent struct {
-	Type       EventType      `json:"type"`
-	Index      int            `json:"index,omitempty"`
-	Text       string         `json:"text,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	ToolName   string         `json:"tool_name,omitempty"`
-	Arguments  string         `json:"arguments,omitempty"`
-	StopReason StopReason     `json:"stop_reason,omitempty"`
-	Usage      *Usage         `json:"usage,omitempty"`
-	Error      *Error         `json:"error,omitempty"`
+	Type       EventType  `json:"type"`
+	Index      int        `json:"index,omitempty"`
+	Text       string     `json:"text,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolName   string     `json:"tool_name,omitempty"`
+	Arguments  string     `json:"arguments,omitempty"`
+	StopReason StopReason `json:"stop_reason,omitempty"`
+	Usage      *Usage     `json:"usage,omitempty"`
+	Error      *Error     `json:"error,omitempty"`
 	// Commit marks client-visible semantic content (text/tool start).
 	Commit bool `json:"-"`
 }
@@ -148,16 +148,17 @@ type Error struct {
 
 // Error codes from PRD §10.4.
 const (
-	ErrAuthentication     = "authentication_error"
-	ErrPermissionDenied   = "permission_denied"
-	ErrInvalidRequest     = "invalid_request"
-	ErrUnsupportedFeature = "unsupported_feature"
-	ErrModelNotFound      = "model_not_found"
-	ErrRateLimited        = "rate_limited"
-	ErrProviderAuth       = "provider_auth_error"
+	ErrAuthentication      = "authentication_error"
+	ErrPermissionDenied    = "permission_denied"
+	ErrInvalidRequest      = "invalid_request"
+	ErrRequestTooLarge     = "request_too_large"
+	ErrUnsupportedFeature  = "unsupported_feature"
+	ErrModelNotFound       = "model_not_found"
+	ErrRateLimited         = "rate_limited"
+	ErrProviderAuth        = "provider_auth_error"
 	ErrProviderUnavailable = "provider_unavailable"
-	ErrUpstreamTimeout    = "upstream_timeout"
-	ErrInternal           = "internal_error"
+	ErrUpstreamTimeout     = "upstream_timeout"
+	ErrInternal            = "internal_error"
 )
 
 func NewError(code, message string, httpStatus int) *Error {
