@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -43,7 +44,7 @@ func generateCSRFToken() string {
 func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	var token string
 	ct := r.Header.Get("Content-Type")
-	if len(ct) >= 19 && ct[:19] == "application/json" {
+	if strings.HasPrefix(strings.ToLower(ct), "application/json") {
 		var body struct {
 			Token string `json:"token"`
 		}
@@ -79,7 +80,7 @@ func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
 	s.setCSRFCookie(w, csrf)
 
 	// If form-encoded (no JS), redirect to the console. Otherwise return JSON for fetch().
-	if ct := r.Header.Get("Content-Type"); len(ct) >= 19 && ct[:19] == "application/json" {
+	if ct := r.Header.Get("Content-Type"); strings.HasPrefix(strings.ToLower(ct), "application/json") {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"session":    map[string]any{"id": sid},
 			"csrf":       csrf,
