@@ -252,8 +252,28 @@ func (w *WebSearcher) FetchPage(pageURL string) (string, error) {
 }
 
 // fetchPageText fetches a page and returns benchmark-relevant lines (those
-// containing a percentage or Elo near a benchmark keyword), truncated.
+// containing a percentage or Elo near a benchmark keyword), truncated. If the
+// direct fetch fails (blocked site, TLS-intercepting proxy), it retries through
+// the keyless Jina AI reader (https://s.jina.ai/<url>), which returns cleaned,
+// LLM-readable page text. This keeps evidence extraction working on sites that
+// would otherwise be unreachable.
 func (w *WebSearcher) fetchPageText(ctx context.Context, client *http.Client, pageURL string) (string, error) {
+	text, err := w.fetchDirect(ctx, client, pageURL)
+	if err != nil {
+		// Fallback: Jina AI reader (keyless) cleans and returns the page text.
+		if jt, jerr := w.fetchViaJina(ctx, client, pageURL); jerr == nil && jt != "" {
+			log.Printf("[external] page fetch via Jina reader fallback: %s", pageURL)
+			text = jt
+			err = nil
+		}
+	}
+	if err != nil {
+		return "", err
+	}
+	return keepBenchmarkLines(text), nil
+}
+
+func (w *WebSearcher) fetchDirect(ctx context.Context, client *http.Client, pageURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
 		return "", err
@@ -271,8 +291,37 @@ func (w *WebSearcher) fetchPageText(ctx context.Context, client *http.Client, pa
 	if err != nil {
 		return "", err
 	}
-	text := stripTags(string(raw))
-	// Keep only lines that mention a benchmark keyword and a number.
+	return stripTags(string(raw)), nil
+}
+
+// fetchViaJina fetches a page through the keyless Jina AI reader endpoint,
+// which returns cleaned article text suitable for benchmark extraction.
+func (w *WebSearcher) fetchViaJina(ctx context.Context, client *http.Client, pageURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://s.jina.ai/"+pageURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "TermRouter/1.0 (+https://github.com/termrouter/termrouter)")
+	req.Header.Set("Connection", "close")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("jina reader returned %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	// Jina already returns clean text (no HTML tags).
+	return string(raw), nil
+}
+
+// keepBenchmarkLines filters page text down to lines that mention a benchmark
+// keyword together with a percentage or Elo figure, truncated to a cap.
+func keepBenchmarkLines(text string) string {
 	var keep []string
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
@@ -289,7 +338,7 @@ func (w *WebSearcher) fetchPageText(ctx context.Context, client *http.Client, pa
 			break
 		}
 	}
-	return strings.Join(keep, " "), nil
+	return strings.Join(keep, " ")
 }
 
 var benchmarkWord = regexp.MustCompile(`(?i)livebench|swe[- ]?bench|intelligence index|gpqa|mmlu|math-?500|humaneval|ifeval|mmmu|arena|elo|benchmark`)
