@@ -672,7 +672,7 @@ var categoryTests = map[string]categoryTest{
 	},
 	CapSummarization: {
 		prompt: "Summarize the following article in 2-3 sentences:\n\nClimate change poses one of the most significant challenges of our time. Rising global temperatures have led to more frequent extreme weather events, including hurricanes, droughts, and heatwaves. Scientists warn that without immediate and sustained reductions in greenhouse gas emissions, the impacts will become increasingly severe. Many countries have pledged to achieve net-zero emissions by 2050, though critics argue the current commitments are insufficient to meet the Paris Agreement goals.",
-		eval: evalSummarization,
+		eval:   evalSummarization,
 	},
 	CapExtraction: {
 		prompt: "Extract all email addresses from this text and list them:\n\n'You can reach our sales team at sales@example.com or support@test.org. For partnerships, contact partners@company.co.uk. Our office phone is 555-0123.'",

@@ -44,8 +44,10 @@ func (f *fakeAdapter) ClassifyError(status int, body []byte, err error) *normali
 
 type fakeStream struct{}
 
-func (s *fakeStream) Recv() (normalization.StreamEvent, error) { return normalization.StreamEvent{}, io.EOF }
-func (s *fakeStream) Close() error                            { return nil }
+func (s *fakeStream) Recv() (normalization.StreamEvent, error) {
+	return normalization.StreamEvent{}, io.EOF
+}
+func (s *fakeStream) Close() error { return nil }
 
 func floatPtr(v float64) *float64 { return &v }
 
@@ -147,7 +149,7 @@ func TestUnpricedFallbackTargetRejected(t *testing.T) {
 
 func TestAllFallbackTargetsPricedProceeds(t *testing.T) {
 	cfg := &config.Config{Pricing: map[string]config.PriceConfig{
-		"openai/gpt-4o": {InputUSDPerMillion: 5, OutputUSDPerMillion: 15},
+		"openai/gpt-4o":      {InputUSDPerMillion: 5, OutputUSDPerMillion: 15},
 		"openai/gpt-4o-mini": {InputUSDPerMillion: 1, OutputUSDPerMillion: 3},
 	}}
 	c, ad := testCoordinator(t, cfg, nil)
@@ -181,7 +183,7 @@ func TestSmartPlanUnpricedAttemptRejected(t *testing.T) {
 
 func TestSmartPlanAllPricedProceeds(t *testing.T) {
 	cfg := &config.Config{Pricing: map[string]config.PriceConfig{
-		"openai/gpt-4o":   {InputUSDPerMillion: 5, OutputUSDPerMillion: 15},
+		"openai/gpt-4o":      {InputUSDPerMillion: 5, OutputUSDPerMillion: 15},
 		"anthropic/claude-x": {InputUSDPerMillion: 8, OutputUSDPerMillion: 24},
 	}}
 	c, ad := testCoordinator(t, cfg, nil)

@@ -108,9 +108,9 @@ func (s *Server) handleStartAssessment(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	provider, model := splitProfileID(id)
 	var body struct {
-		Depth      smart.AssessmentDepth  `json:"depth"`
-		Categories []string               `json:"categories"`
-		Limits     *smart.AssessmentPlan  `json:"limits,omitempty"`
+		Depth      smart.AssessmentDepth `json:"depth"`
+		Categories []string              `json:"categories"`
+		Limits     *smart.AssessmentPlan `json:"limits,omitempty"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())

@@ -4,13 +4,14 @@ import "errors"
 
 // Exit codes from PRD §4.4.
 const (
-	ExitOK              = 0
-	ExitGeneral         = 1
-	ExitInvalidConfig   = 2
-	ExitAuth            = 3
-	ExitUnavailable     = 4
-	ExitConflict        = 5
-	ExitPartial         = 6
+	ExitOK            = 0
+	ExitGeneral       = 1
+	ExitInvalidConfig = 2
+	ExitAuth          = 3
+	ExitUnavailable   = 4
+	ExitConflict      = 5
+	ExitPartial       = 6
+	ExitNotFound      = 7
 )
 
 // exitError carries a process exit code.

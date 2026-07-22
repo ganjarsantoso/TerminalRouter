@@ -15,7 +15,14 @@ func (s *Server) getExternalService() *external.Service {
 	if err != nil {
 		cfg = &revisionedConfig{Cfg: &config.Config{}}
 	}
-	searcher := external.NewWebSearcher(cfg.Cfg.WebSearch)
+	searcher, err := external.NewWebSearcher(cfg.Cfg.WebSearch)
+	if err != nil {
+		// Log the error but continue with a default searcher to avoid breaking the UI.
+		if s.Log != nil {
+			s.Log.Warn("external web searcher init failed; using defaults", "error", err)
+		}
+		searcher, _ = external.NewWebSearcher(config.WebSearchConfig{})
+	}
 	summarizer := NewProviderSummarizer(cfg.Cfg, s.Creds, summarizerTarget{})
 	return external.NewService(s.Store, searcher, summarizer)
 }
@@ -174,10 +181,10 @@ func (s *Server) handleApplyExternalProposal(w http.ResponseWriter, r *http.Requ
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"status":            "applied",
-		"profile_id":        profileID,
-		"revision":          rev,
-		"capabilities":      caps,
+		"status":                  "applied",
+		"profile_id":              profileID,
+		"revision":                rev,
+		"capabilities":            caps,
 		"preserve_user_overrides": false,
 	})
 }

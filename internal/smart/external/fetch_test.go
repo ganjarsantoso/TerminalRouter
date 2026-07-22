@@ -54,8 +54,8 @@ func TestIsApprovedHost(t *testing.T) {
 
 func TestIsApprovedURL(t *testing.T) {
 	cases := []struct {
-		raw   string
-		want  bool
+		raw  string
+		want bool
 	}{
 		{"", true},
 		{"https://livebench.ai/leaderboard", true},

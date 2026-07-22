@@ -11,7 +11,7 @@ TermRouter centralizes provider credentials, normalizes protocols, exposes stabl
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Interface: Terminal-first](https://img.shields.io/badge/Interface-Terminal--first-24292f)](#cli-reference)
-[![Optional Console](https://img.shields.io/badge/Console-Local--only-24292f)](#termrouter-console)](#cli-reference)
+[![Optional Console](https://img.shields.io/badge/Console-Local--only-24292f)](#termrouter-console)
 [![OpenAI Compatible](https://img.shields.io/badge/API-OpenAI--compatible-412991)](#api-compatibility)
 [![Anthropic Compatible](https://img.shields.io/badge/API-Anthropic--compatible-D97757)](#api-compatibility)
 [![Smart Routes](https://img.shields.io/badge/Routing-Task--aware-7C3AED)](#smart-routes)
@@ -66,6 +66,9 @@ Clients and coding agents
 - [Independent benchmark consensus](#independent-benchmark-consensus)
 - [Local model assessment](#local-model-assessment)
 - [Client keys and policy controls](#client-keys-and-policy-controls)
+- [Token optimization](#token-optimization)
+- [LUI semantic packets](#lui-semantic-packets)
+- [Quota tracking](#quota-tracking)
 - [Connect applications](#connect-applications)
 - [API compatibility](#api-compatibility)
 - [Streaming and fallback guarantees](#streaming-and-fallback-guarantees)
@@ -889,7 +892,7 @@ termrouter key create \
 - optional expiration;
 - portable/shared-key marker.
 
-In public-hosting mode, portable keys are rejected unless mandatory restrictions are present, unless the operator deliberately supplies the explicit unsafe override.
+In public-hosting mode, portable keys are rejected unless mandatory restrictions (alias, request-body limit, and daily spend budget) are present. The break-glass flag `--unsafe-unrestricted-portable` allows writing a portable key that lacks one or more of those controls; it weakens security and financial protection and should only be used for deliberate recovery. Each use emits a structured `security_event` audit log entry (`portable_key_unsafe_override`).
 
 ### Manage keys
 
@@ -903,6 +906,125 @@ termrouter key remove <key-id> --yes
 
 > [!WARNING]
 > A shared portable key creates shared impact: compromise affects all devices, attribution becomes weaker, and rotation must update every client. Prefer separate device or application keys where practical.
+
+---
+
+## Token optimization
+
+TermRouter can optionally reduce token usage before a request reaches an upstream provider. Optimization is **opt-in** (`optimization.enabled: false` by default) and is inspected offline with the `termrouter optimize` command family.
+
+### Modes: safe, balanced, aggressive
+
+| Mode | Intent | Typical transforms |
+|------|--------|--------------------|
+| `off` | Measure only; do not transform | None |
+| `safe` | Lossless / near-lossless compaction | Strip ANSI, compact JSON, deduplicate, stabilize prompt-cache prefixes |
+| `balanced` | Selective reduction while preserving operational state | Safe transforms plus conversation-window trimming and tool-result compaction |
+| `aggressive` | Maximum local reduction | Balanced transforms plus more aggressive conversation reduction (requires `aggressive_allowed: true`) |
+
+Policy precedence is fail-closed:
+
+```text
+server maximum (default_mode + aggressive_allowed)
+  > client-key maximum
+  > client request preference
+  > server default
+```
+
+If aggressive mode is requested but not allowed, TermRouter clamps to the highest permitted mode rather than failing open.
+
+### Semantic compression is shadow-only by default
+
+Optional external semantic compressors are **disabled** by default. When evaluation shadow mode is enabled (`optimization.evaluation.shadow_mode`), a compressor may be invoked for quality comparison only: the live request is **not** replaced by the compressed payload. Shadow evaluations record a distinct action (`semantic_compression_shadow_evaluated`) and never set live compression token counters.
+
+### Compressor trust boundary
+
+- External compressors are a separate trust domain from TermRouter itself.
+- `optimization.privacy.allow_external_compressors` must be explicitly enabled before remote adapters run.
+- Compressor endpoints should stay on loopback or another tightly controlled path; non-loopback destinations require `allow_non_loopback`.
+- Remote compressors can see request content that reaches them. Treat them like any other third-party processor: TLS, network isolation, and failure modes (`bypass` vs `reject`) matter.
+- Prefer local deterministic optimizers for production; enable remote semantic compression only after deliberate review.
+
+### Estimated versus provider-reported values
+
+Optimization analysis and reports primarily use **local token estimates** (tokenizer or chars-per-token fallback with a safety multiplier). These are not a substitute for provider-reported usage. Spend budgets and post-request accounting may still reconcile against provider-reported tokens when available. Always treat pre-flight savings as estimates.
+
+### CLI
+
+```bash
+termrouter optimize status
+termrouter optimize analyze --file request.json --model openai/gpt-4o --mode safe
+termrouter optimize dry-run --file request.json --mode balanced
+termrouter optimize compare --file request.json --modes off,safe,balanced,aggressive
+termrouter optimize report --last 7d
+termrouter optimize plugins list
+termrouter optimize plugins test <name>
+```
+
+`dry-run` never calls a provider. `analyze` / `compare` estimate savings only.
+
+---
+
+## LUI semantic packets
+
+**LUI (Lightweight Universal Instruction) v0.1** is an experimental structured packet format used inside TermRouter for optimization and inspection. It is **not** a provider-native protocol.
+
+### Status and assumptions
+
+- LUI is **experimental**. Schema, renderers, and integrity rules may evolve.
+- Do **not** assume any upstream provider understands LUI natively. Before a provider call, TermRouter renders or otherwise maps semantics back into ordinary chat/tool messages.
+- Integrity hashing treats multi-value collections (goals, constraints, context, state, tools, evidence, output fields, dictionary) as **order-insensitive multisets**: reordering entries does not change the content hash. Scalar fields keep their natural values.
+
+### CLI
+
+```bash
+termrouter lui validate packet.json
+termrouter lui render packet.json --format compact-json
+termrouter lui inspect --request <request-id>
+```
+
+Render formats include `compact-json`, `human`, `tagged-text`, and `native-prompt`. `inspect` shows stored optimization metadata for a request ID without replaying raw prompts (subject to privacy settings).
+
+---
+
+## Quota tracking
+
+The `termrouter quota` commands surface multi-account usage windows, freshness, and routing recommendations. Quota data is assembled from several sources and must be interpreted carefully.
+
+### Data sources and limitations
+
+| Source | Meaning |
+|--------|---------|
+| `local_authoritative` | Derived from TermRouter's own request log / reservations |
+| `local_estimated` | Local estimate when authoritative counts are incomplete |
+| `provider_header` / `provider_reported` | Values observed from provider response headers or reports |
+| `provider_api` | Polled from a provider usage API when configured |
+| `manual_configuration` | Operator-supplied limits |
+| `reconciled` | Combined after comparing local and provider figures |
+
+Limitations:
+
+- Not every provider exposes reliable remaining-quota headers.
+- Provider-reported windows can lag, reset on provider calendars, or omit dimensions TermRouter tracks locally.
+- Estimated cost depends on configured pricing; unpriced routes fail closed for portable/public spend enforcement.
+- `quota refresh` re-aggregates from the local request log; it does not invent provider-side remaining balances.
+
+### Estimated versus provider-reported
+
+- **Estimated** values are useful for early warning and local budgets.
+- **Provider-reported** values are authoritative for the provider's own limits when present, but may not match local token accounting (different tokenizers, cached tokens, tool overhead).
+- Recommendations (`termrouter quota recommendations`) bias routing using the best available snapshot; they are advisory unless enforcement mode is hard-limit.
+
+### CLI
+
+```bash
+termrouter quota status
+termrouter quota windows
+termrouter quota report
+termrouter quota refresh
+termrouter quota events
+termrouter quota recommendations
+```
 
 ---
 
@@ -1457,6 +1579,37 @@ termrouter key set-policy <key-id>
 termrouter key rotate <key-id>
 termrouter key disable <key-id>
 termrouter key remove <key-id> --yes
+```
+
+### Token optimization
+
+```bash
+termrouter optimize status
+termrouter optimize analyze --file request.json --model <provider/model>
+termrouter optimize dry-run --file request.json --mode safe
+termrouter optimize compare --file request.json --modes off,safe,balanced,aggressive
+termrouter optimize report --last 7d
+termrouter optimize plugins list
+termrouter optimize plugins test <name>
+```
+
+### LUI
+
+```bash
+termrouter lui validate <packet.json>
+termrouter lui render <packet.json> --format compact-json
+termrouter lui inspect --request <request-id>
+```
+
+### Quota
+
+```bash
+termrouter quota status
+termrouter quota windows
+termrouter quota report
+termrouter quota refresh
+termrouter quota events
+termrouter quota recommendations
 ```
 
 ### Console, logs, usage, and config

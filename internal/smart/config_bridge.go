@@ -40,11 +40,11 @@ func SplitProfilesFromConfig(cfg *config.Config) (user, assessment, external map
 
 func baselineToProfile(id string, bl *config.ProfileBaseline, source string) ModelProfile {
 	p := ModelProfile{
-		ID:          id,
-		Source:      source,
-		Version:     bl.Version,
+		ID:           id,
+		Source:       source,
+		Version:      bl.Version,
 		Capabilities: map[string]float64{},
-		Confidence:  map[string]float64{},
+		Confidence:   map[string]float64{},
 	}
 	for k, v := range bl.Capabilities {
 		p.Capabilities[k] = v
@@ -54,16 +54,16 @@ func baselineToProfile(id string, bl *config.ProfileBaseline, source string) Mod
 	}
 	if bl.Properties != nil {
 		p.Properties = ModelProperties{
-			Vision: bl.Properties.Vision,
-			Tools: bl.Properties.Tools,
-			ParallelTools: bl.Properties.ParallelTools,
+			Vision:           bl.Properties.Vision,
+			Tools:            bl.Properties.Tools,
+			ParallelTools:    bl.Properties.ParallelTools,
 			StructuredOutput: bl.Properties.StructuredOutput,
-			Streaming: bl.Properties.Streaming,
-			ContextWindow: bl.Properties.ContextWindow,
-			MaxOutputTokens: bl.Properties.MaxOutputTokens,
-			CostTier: bl.Properties.CostTier,
-			LatencyTier: bl.Properties.LatencyTier,
-			Privacy: bl.Properties.Privacy,
+			Streaming:        bl.Properties.Streaming,
+			ContextWindow:    bl.Properties.ContextWindow,
+			MaxOutputTokens:  bl.Properties.MaxOutputTokens,
+			CostTier:         bl.Properties.CostTier,
+			LatencyTier:      bl.Properties.LatencyTier,
+			Privacy:          bl.Properties.Privacy,
 		}
 	}
 	if i := strings.IndexByte(id, '/'); i > 0 {
@@ -88,16 +88,16 @@ func ProfileToConfig(p ModelProfile) config.ModelProfileConfig {
 		Capabilities: p.Capabilities,
 		Confidence:   p.Confidence,
 		Properties: &config.ModelPropertiesConfig{
-			Vision: p.Properties.Vision,
-			Tools: p.Properties.Tools,
-			ParallelTools: p.Properties.ParallelTools,
+			Vision:           p.Properties.Vision,
+			Tools:            p.Properties.Tools,
+			ParallelTools:    p.Properties.ParallelTools,
 			StructuredOutput: p.Properties.StructuredOutput,
-			Streaming: p.Properties.Streaming,
-			ContextWindow: p.Properties.ContextWindow,
-			MaxOutputTokens: p.Properties.MaxOutputTokens,
-			CostTier: p.Properties.CostTier,
-			LatencyTier: p.Properties.LatencyTier,
-			Privacy: p.Properties.Privacy,
+			Streaming:        p.Properties.Streaming,
+			ContextWindow:    p.Properties.ContextWindow,
+			MaxOutputTokens:  p.Properties.MaxOutputTokens,
+			CostTier:         p.Properties.CostTier,
+			LatencyTier:      p.Properties.LatencyTier,
+			Privacy:          p.Properties.Privacy,
 		},
 	}
 	out := config.ModelProfileConfig{}
@@ -115,12 +115,12 @@ func ProfileToConfig(p ModelProfile) config.ModelProfileConfig {
 // RouteFromConfig builds a smart RouteConfig from config.RouteConfig.
 func RouteFromConfig(name string, r config.RouteConfig) RouteConfig {
 	rc := RouteConfig{
-		RouteID: name,
-		Mode:    ModeShadow,
-		Policy:  PolicyBalanced,
-		StrictProfiles: true,
+		RouteID:         name,
+		Mode:            ModeShadow,
+		Policy:          PolicyBalanced,
+		StrictProfiles:  true,
 		SessionAffinity: true,
-		SessionTTL: 60 * time.Minute,
+		SessionTTL:      60 * time.Minute,
 	}
 	if r.Smart != nil {
 		if r.Smart.Mode != "" {

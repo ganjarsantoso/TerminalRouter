@@ -2,6 +2,7 @@ package console
 
 import (
 	"context"
+	"time"
 
 	"github.com/termrouter/termrouter/internal/config"
 	"gopkg.in/yaml.v3"
@@ -21,7 +22,9 @@ func (s *Server) loadConfig() (*revisionedConfig, error) {
 	}
 	ctx := s.Ctx
 	if ctx == nil {
-		ctx = context.Background()
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ctx = bgCtx
 	}
 	rev, err := s.Store.GetLatestConfigRevision(ctx)
 	if err != nil {
@@ -54,7 +57,9 @@ func (s *Server) applyMutation(changeType, resources string, change func(cfg *co
 	san, _ := yaml.Marshal(cfg.ExportSanitized())
 	ctx := s.Ctx
 	if ctx == nil {
-		ctx = context.Background()
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ctx = bgCtx
 	}
 	stored, err := s.Store.InsertConfigHistory(ctx, s.sessionID(), changeType, resources, string(raw), string(san))
 	if err == nil {

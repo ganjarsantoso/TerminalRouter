@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/termrouter/termrouter/internal/app"
@@ -35,7 +36,10 @@ func newExternalService() (*external.Service, *config.Config, config.Paths, func
 	if err != nil {
 		return nil, nil, config.Paths{}, nil, err
 	}
-	searcher := external.NewWebSearcher(cfg.WebSearch)
+	searcher, err := external.NewWebSearcher(cfg.WebSearch)
+	if err != nil {
+		return nil, nil, config.Paths{}, nil, err
+	}
 	return external.NewService(store, searcher, nil), cfg, paths, func() { store.Close() }, nil
 }
 
@@ -75,7 +79,9 @@ func modelExternalSearch() *cobra.Command {
 			}
 			defer closer()
 			provider, model := splitProfileID(args[0])
-			cp, ok, err := svc.Search(context.Background(), provider, model)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cp, ok, err := svc.Search(ctx, provider, model)
 			if err != nil {
 				return Exit(ExitGeneral, fmt.Errorf("web search failed: %w", err))
 			}
@@ -121,7 +127,9 @@ func modelExternalProposal() *cobra.Command {
 					current[k] = v
 				}
 			}
-			p, ok, err := svc.BuildProposal(context.Background(), provider, model, current)
+			ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+			defer cancel()
+			p, ok, err := svc.BuildProposal(ctx, provider, model, current)
 			if err != nil {
 				return Exit(ExitGeneral, fmt.Errorf("web search failed: %w", err))
 			}
@@ -142,7 +150,7 @@ func modelExternalProposal() *cobra.Command {
 				}
 				fmt.Printf("  %-22s current=%-7s proposed=%.1f\n", f.Capability, cur, f.Proposed)
 			}
-			fmt.Printf("\nSaved. Apply with: termrouter model external apply %s\n", p.ID)
+			fmt.Printf("\nSaved. Apply with: termrouter model profile external apply %s\n", p.ID)
 			return nil
 		},
 	}

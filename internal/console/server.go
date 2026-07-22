@@ -19,6 +19,7 @@ import (
 	"github.com/termrouter/termrouter/internal/config"
 	"github.com/termrouter/termrouter/internal/credentials"
 	"github.com/termrouter/termrouter/internal/observability"
+	"github.com/termrouter/termrouter/internal/optimization"
 	"github.com/termrouter/termrouter/internal/storage"
 )
 
@@ -27,15 +28,16 @@ var assetsFS embedFS = noEmbedFS{}
 
 // Server is the optional local management Console for TermRouter.
 type Server struct {
-	App   *app.Server // optional, when gateway is co-located
-	Store *storage.Store
-	Creds *credentials.Manager
-	Log   *observability.Logger
-	Paths config.Paths
-	Ctx   context.Context
-	Home  string
-	Port  int
-	Host  string
+	App    *app.Server // optional, when gateway is co-located
+	Store  *storage.Store
+	Creds  *credentials.Manager
+	Log    *observability.Logger
+	Opt    *optimization.Engine
+	Paths  config.Paths
+	Ctx    context.Context
+	Home   string
+	Port   int
+	Host   string
 	NoOpen bool
 
 	// ReloadRuntime applies Console config changes to the live gateway.
@@ -59,6 +61,7 @@ type Options struct {
 	App    *app.Server
 	Creds  *credentials.Manager
 	Log    *observability.Logger
+	Opt    *optimization.Engine
 }
 
 // New builds a Console server.
@@ -89,25 +92,36 @@ func New(opts Options) (*Server, error) {
 		log, _ = observability.New("info", paths.LogsDir)
 	}
 	creds := opts.Creds
+	var optEngine *optimization.Engine
 	if creds == nil {
 		cfg, err := config.Load(paths.Config)
 		if err == nil {
 			creds, _ = credentials.NewManager(cfg.Credentials.Backend, paths.Vault, os.Getenv("TERMROUTER_VAULT_PASSPHRASE"))
+			if opts.Opt == nil && cfg.Optimization.Enabled {
+				optEngine = optimization.NewEngine(cfg.Optimization, store, log)
+			}
+		}
+	} else if opts.Opt == nil {
+		cfg, err := config.Load(paths.Config)
+		if err == nil && cfg.Optimization.Enabled {
+			optEngine = optimization.NewEngine(cfg.Optimization, store, log)
 		}
 	}
 	return &Server{
-		App:           opts.App,
-		Store:         store,
-		Creds:         creds,
-		Log:           log,
-		Paths:         paths,
-		Home:          home,
-		Port:          port,
-		Host:          host,
-		NoOpen:        opts.NoOpen,
-		Ctx:           context.Background(),
-		ReloadRuntime: true,
-		sessions:      map[string]session{},
+		App:    opts.App,
+		Store:  store,
+		Creds:  creds,
+		Log:    log,
+		Opt:    optEngine,
+		Paths:  paths,
+		Home:   home,
+		Port:   port,
+		Host:   host,
+		NoOpen: opts.NoOpen,
+		// Zero default; replaced with request context in Start().
+		Ctx:            context.Background(),
+		ReloadRuntime:  true,
+		sessions:       map[string]session{},
 		bootstrapToken: generateToken(),
 	}, nil
 }
@@ -176,14 +190,14 @@ func (s *Server) Start(ctx context.Context) error {
 		return fmt.Errorf("console must bind to loopback; non-loopback host %q rejected (security policy)", s.Host)
 	}
 	// Ensure a bootstrap token exists for first-login.
-		s.mu.Lock()
-		if s.bootstrapToken == "" {
-			s.bootstrapToken = s.generateBootstrapToken()
-		}
-		if s.sessions == nil {
-			s.sessions = map[string]session{}
-		}
-		s.mu.Unlock()
+	s.mu.Lock()
+	if s.bootstrapToken == "" {
+		s.bootstrapToken = s.generateBootstrapToken()
+	}
+	if s.sessions == nil {
+		s.sessions = map[string]session{}
+	}
+	s.mu.Unlock()
 
 	addr := fmt.Sprintf("%s:%d", s.Host, s.Port)
 	ln, err := net.Listen("tcp", addr)
@@ -210,7 +224,9 @@ func (s *Server) Start(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		return s.Shutdown(context.Background())
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return s.Shutdown(shutdownCtx)
 	case err := <-errCh:
 		if err == http.ErrServerClosed {
 			return nil

@@ -78,16 +78,16 @@ func buildConsensus(id ModelIdentity, recs []EvidenceRecord) ConsensusProfile {
 			mandatory = true
 		}
 		caps[c] = ConsensusCapability{
-			Capability:     c,
-			Estimate:       roundHalf(est),
-			Confidence:     conf,
-			LowBand:        roundHalf(low),
-			HighBand:       roundHalf(high),
-			SourceCount:    len(capped),
-			Contributing:   capped,
-			PrimarySource:  primary,
+			Capability:      c,
+			Estimate:        roundHalf(est),
+			Confidence:      conf,
+			LowBand:         roundHalf(low),
+			HighBand:        roundHalf(high),
+			SourceCount:     len(capped),
+			Contributing:    capped,
+			PrimarySource:   primary,
 			MandatoryReview: review,
-			ExcludedCount:  excludedByCap[c],
+			ExcludedCount:   excludedByCap[c],
 		}
 		overallVals = append(overallVals, est)
 	}

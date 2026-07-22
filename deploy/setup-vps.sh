@@ -9,6 +9,8 @@
 # Idempotent: re-running is safe.
 set -euo pipefail
 
+log() { printf '[setup] %s\n' "$*"; }
+
 TERMROUTER_USER="termrouter"
 BIN_SRC="${TERMROUTER_BIN_SRC:-./termrouter}"
 BIN_DST="/opt/termrouter/termrouter"
@@ -21,8 +23,6 @@ SSH_PORT="${SSH_PORT:-22}"
 case "$SSH_PORT" in
   ''|*[!0-9]*) log "SSH_PORT must be numeric; falling back to 22"; SSH_PORT=22 ;;
 esac
-
-log() { printf '[setup] %s\n' "$*"; }
 
 # --- Stage 4: service user and paths -----------------------------------------
 if ! id -u "$TERMROUTER_USER" >/dev/null 2>&1; then

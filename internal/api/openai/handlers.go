@@ -15,6 +15,7 @@ import (
 	"github.com/termrouter/termrouter/internal/execution"
 	"github.com/termrouter/termrouter/internal/normalization"
 	"github.com/termrouter/termrouter/internal/observability"
+	"github.com/termrouter/termrouter/internal/optimization"
 	"github.com/termrouter/termrouter/internal/router"
 	"github.com/termrouter/termrouter/internal/smart"
 	"github.com/termrouter/termrouter/internal/storage"
@@ -113,7 +114,7 @@ func (g *Gateway) ChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := g.Coordinator.Execute(ctx, nreq, plan, execution.PolicyContext{
-		ClientKey:    middleware.ClientKeyFrom(ctx),
+		ClientKey:     middleware.ClientKeyFrom(ctx),
 		PublicHosting: g.Cfg.PublicHosting.Enabled,
 	})
 	lat := time.Since(start)
@@ -134,7 +135,7 @@ func (g *Gateway) handleStream(ctx context.Context, w http.ResponseWriter, r *ht
 		return
 	}
 	sr, err := g.Coordinator.ExecuteStream(ctx, nreq, plan, execution.PolicyContext{
-		ClientKey:    middleware.ClientKeyFrom(ctx),
+		ClientKey:     middleware.ClientKeyFrom(ctx),
 		PublicHosting: g.Cfg.PublicHosting.Enabled,
 	})
 	if err != nil {
@@ -143,7 +144,18 @@ func (g *Gateway) handleStream(ctx context.Context, w http.ResponseWriter, r *ht
 		middleware.WriteError(w, r, ne)
 		return
 	}
+	var usage *normalization.Usage
 	defer sr.Stream.Close()
+	defer func() {
+		if sr.OptFinalizer != nil {
+			inputTokens, outputTokens := -1, -1
+			if usage != nil {
+				inputTokens = usage.InputTokens
+				outputTokens = usage.OutputTokens
+			}
+			sr.OptFinalizer.Finalize(r.Context(), optimization.RecordComplete, inputTokens, outputTokens, -1)
+		}
+	}()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -156,7 +168,6 @@ func (g *Gateway) handleStream(ctx context.Context, w http.ResponseWriter, r *ht
 		id = "chatcmpl-" + observability.RequestIDFrom(r.Context())
 	}
 	model := plan.PublicModel
-	var usage *normalization.Usage
 	var finish string
 	ttft := 0
 	first := true

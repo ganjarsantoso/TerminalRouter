@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -26,6 +27,208 @@ type Config struct {
 	WebSearch     WebSearchConfig               `yaml:"web_search,omitempty" json:"web_search,omitempty"`
 	PublicHosting PublicHostingConfig           `yaml:"public_hosting,omitempty" json:"public_hosting,omitempty"`
 	Pricing       map[string]PriceConfig        `yaml:"pricing,omitempty" json:"pricing,omitempty"`
+	Optimization  OptimizationConfig            `yaml:"optimization,omitempty" json:"optimization,omitempty"`
+}
+
+// OptimizationMode identifies a token-optimization aggressiveness tier.
+type OptimizationMode string
+
+const (
+	OptModeOff        OptimizationMode = "off"
+	OptModeSafe       OptimizationMode = "safe"
+	OptModeBalanced   OptimizationMode = "balanced"
+	OptModeAggressive OptimizationMode = "aggressive"
+)
+
+// ParseOptimizationMode normalizes and validates a mode string. Empty maps to
+// the safe default. Unknown values return an error.
+func ParseOptimizationMode(s string) (OptimizationMode, error) {
+	switch OptimizationMode(strings.ToLower(strings.TrimSpace(s))) {
+	case "", OptModeSafe:
+		return OptModeSafe, nil
+	case OptModeOff:
+		return OptModeOff, nil
+	case OptModeBalanced:
+		return OptModeBalanced, nil
+	case OptModeAggressive:
+		return OptModeAggressive, nil
+	default:
+		return "", fmt.Errorf("invalid optimization mode %q (want off|safe|balanced|aggressive)", s)
+	}
+}
+
+// Less reports whether mode a is strictly less aggressive than mode b.
+func (m OptimizationMode) Less(b OptimizationMode) bool {
+	order := map[OptimizationMode]int{OptModeOff: 0, OptModeSafe: 1, OptModeBalanced: 2, OptModeAggressive: 3}
+	return order[m] < order[b]
+}
+
+// OptimizationConfig is the top-level token-optimization configuration.
+type OptimizationConfig struct {
+	Enabled     bool             `yaml:"enabled" json:"enabled"`
+	DefaultMode OptimizationMode `yaml:"default_mode" json:"default_mode"`
+	// AggressiveAllowed permits the aggressive mode at all (server maximum
+	// safety policy). When false, aggressive is clamped to balanced.
+	AggressiveAllowed   bool                        `yaml:"aggressive_allowed" json:"aggressive_allowed"`
+	TokenEstimation     TokenEstimationConfig       `yaml:"token_estimation" json:"token_estimation"`
+	PromptCache         PromptCacheConfig           `yaml:"prompt_cache" json:"prompt_cache"`
+	Deterministic       DeterministicConfig         `yaml:"deterministic" json:"deterministic"`
+	Conversation        ConversationConfig          `yaml:"conversation" json:"conversation"`
+	SemanticCompression SemanticCompressionConfig   `yaml:"semantic_compression" json:"semantic_compression"`
+	Output              OutputBudgetConfig          `yaml:"output" json:"output"`
+	Privacy             OptimizationPrivacyConfig   `yaml:"privacy" json:"privacy"`
+	Evaluation          OptimizationEvalConfig      `yaml:"evaluation" json:"evaluation"`
+	Compressors         map[string]CompressorConfig `yaml:"compressors,omitempty" json:"compressors,omitempty"`
+	ToolGroups          map[string][]string         `yaml:"tool_groups,omitempty" json:"tool_groups,omitempty"`
+}
+
+// TokenEstimationConfig controls the fallback token estimator.
+type TokenEstimationConfig struct {
+	FallbackCharsPerToken float64 `yaml:"fallback_chars_per_token" json:"fallback_chars_per_token"`
+	SafetyMultiplier      float64 `yaml:"safety_multiplier" json:"safety_multiplier"`
+}
+
+// PromptCacheConfig controls request-prefix stabilization for cache opportunity
+// estimation. This does NOT send native cache-control headers to providers;
+// actual cache-hit savings require provider-native cache support which is not
+// yet wired. The cache_opportunity_tokens_est field records the estimated
+// cacheable prefix, separate from any cache_reported_by_provider actuals.
+type PromptCacheConfig struct {
+	Enabled                bool `yaml:"enabled" json:"enabled"`
+	MinimumPrefixTokens    int  `yaml:"minimum_prefix_tokens" json:"minimum_prefix_tokens"`
+	StabilizeSystem        bool `yaml:"stabilize_system" json:"stabilize_system"`
+	StabilizeTools         bool `yaml:"stabilize_tools" json:"stabilize_tools"`
+	StabilizeStaticContext bool `yaml:"stabilize_static_context" json:"stabilize_static_context"`
+}
+
+// DeterministicConfig toggles safe deterministic compactors.
+type DeterministicConfig struct {
+	Deduplicate        bool `yaml:"deduplicate" json:"deduplicate"`
+	CompactJSON        bool `yaml:"compact_json" json:"compact_json"`
+	CompactLogs        bool `yaml:"compact_logs" json:"compact_logs"`
+	StripANSI          bool `yaml:"strip_ansi" json:"strip_ansi"`
+	CompactToolResults bool `yaml:"compact_tool_results" json:"compact_tool_results"`
+}
+
+// ConversationConfig manages conversation-window trimming.
+type ConversationConfig struct {
+	Enabled         bool `yaml:"enabled" json:"enabled"`
+	RecentTurnsFull int  `yaml:"recent_turns_full" json:"recent_turns_full"`
+	TriggerTokens   int  `yaml:"trigger_tokens" json:"trigger_tokens"`
+	TargetTokens    int  `yaml:"target_tokens" json:"target_tokens"`
+}
+
+// SemanticCompressionConfig gates optional external semantic compressors.
+type SemanticCompressionConfig struct {
+	Enabled                      bool     `yaml:"enabled" json:"enabled"`
+	Adapter                      string   `yaml:"adapter" json:"adapter"`
+	MinimumInputTokens           int      `yaml:"minimum_input_tokens" json:"minimum_input_tokens"`
+	MinimumExpectedSavingsTokens int      `yaml:"minimum_expected_savings_tokens" json:"minimum_expected_savings_tokens"`
+	Timeout                      Duration `yaml:"timeout" json:"timeout"`
+	FailureMode                  string   `yaml:"failure_mode" json:"failure_mode"`
+}
+
+// OutputBudgetConfig drives the adaptive output-token planner.
+type OutputBudgetConfig struct {
+	Mode             string `yaml:"mode" json:"mode"` // off | adaptive
+	DefaultMaxTokens int    `yaml:"default_max_tokens" json:"default_max_tokens"`
+	SimpleMaxTokens  int    `yaml:"simple_max_tokens" json:"simple_max_tokens"`
+	MediumMaxTokens  int    `yaml:"medium_max_tokens" json:"medium_max_tokens"`
+	ComplexMaxTokens int    `yaml:"complex_max_tokens" json:"complex_max_tokens"`
+}
+
+// OptimizationPrivacyConfig controls payload retention and external plug-ins.
+type OptimizationPrivacyConfig struct {
+	AllowExternalCompressors bool `yaml:"allow_external_compressors" json:"allow_external_compressors"`
+	StoreRawPayloads         bool `yaml:"store_raw_payloads" json:"store_raw_payloads"`
+	StoreCompressedPayloads  bool `yaml:"store_compressed_payloads" json:"store_compressed_payloads"`
+	StoreLUIPayloads         bool `yaml:"store_lui_payloads" json:"store_lui_payloads"`
+	StoreMetrics             bool `yaml:"store_metrics" json:"store_metrics"`
+}
+
+// OptimizationEvalConfig controls shadow / quality evaluation.
+type OptimizationEvalConfig struct {
+	ShadowMode bool    `yaml:"shadow_mode" json:"shadow_mode"`
+	SampleRate float64 `yaml:"sample_rate" json:"sample_rate"`
+}
+
+// CompressorConfig configures a single external compressor plug-in.
+type CompressorConfig struct {
+	Enabled          bool     `yaml:"enabled" json:"enabled"`
+	Transport        string   `yaml:"transport" json:"transport"` // http | unix
+	Endpoint         string   `yaml:"endpoint" json:"endpoint"`
+	Timeout          Duration `yaml:"timeout" json:"timeout"`
+	FailureMode      string   `yaml:"failure_mode" json:"failure_mode"` // bypass | reject
+	AllowedContent   []string `yaml:"allowed_content" json:"allowed_content"`
+	TargetRatio      float64  `yaml:"target_ratio" json:"target_ratio"`
+	MaxRequestBytes  int      `yaml:"max_request_bytes,omitempty" json:"max_request_bytes,omitempty"`
+	MaxResponseBytes int      `yaml:"max_response_bytes,omitempty" json:"max_response_bytes,omitempty"`
+	// AllowNonLoopback permits redirection/expansion to non-loopback hosts.
+	AllowNonLoopback bool `yaml:"allow_non_loopback" json:"allow_non_loopback"`
+}
+
+// ProviderCapabilities describes provider-native feature support used by the
+// optimization layer (e.g. prompt caching).
+type ProviderCapabilities struct {
+	PromptCache string `yaml:"prompt_cache,omitempty" json:"prompt_cache,omitempty"` // none | automatic | openai | anthropic | custom
+}
+
+// DefaultOptimization returns safe defaults. Optimization is opt-in (disabled).
+func DefaultOptimization() OptimizationConfig {
+	return OptimizationConfig{
+		Enabled:           false,
+		DefaultMode:       OptModeSafe,
+		AggressiveAllowed: false,
+		TokenEstimation: TokenEstimationConfig{
+			FallbackCharsPerToken: 3.5,
+			SafetyMultiplier:      1.15,
+		},
+		PromptCache: PromptCacheConfig{
+			Enabled:                true,
+			MinimumPrefixTokens:    1024,
+			StabilizeSystem:        true,
+			StabilizeTools:         true,
+			StabilizeStaticContext: true,
+		},
+		Deterministic: DeterministicConfig{
+			Deduplicate:        true,
+			CompactJSON:        true,
+			CompactLogs:        true,
+			StripANSI:          true,
+			CompactToolResults: true,
+		},
+		Conversation: ConversationConfig{
+			Enabled:         true,
+			RecentTurnsFull: 8,
+			TriggerTokens:   24000,
+			TargetTokens:    16000,
+		},
+		SemanticCompression: SemanticCompressionConfig{
+			Enabled:                      false,
+			MinimumInputTokens:           12000,
+			MinimumExpectedSavingsTokens: 2000,
+			Timeout:                      5 * 1000 * 1000 * 1000, // 5s as Duration
+			FailureMode:                  "bypass",
+		},
+		Output: OutputBudgetConfig{
+			Mode:             "adaptive",
+			DefaultMaxTokens: 2048,
+			SimpleMaxTokens:  512,
+			MediumMaxTokens:  2048,
+			ComplexMaxTokens: 4096,
+		},
+		Privacy: OptimizationPrivacyConfig{
+			AllowExternalCompressors: false,
+			StoreRawPayloads:         false,
+			StoreCompressedPayloads:  false,
+			StoreLUIPayloads:         false,
+			StoreMetrics:             true,
+		},
+		Evaluation: OptimizationEvalConfig{
+			ShadowMode: true,
+			SampleRate: 0.05,
+		},
+	}
 }
 
 // PriceConfig describes the per-token cost for a specific provider/model (or a
@@ -121,6 +324,11 @@ type SummarizerConfig struct {
 // country-level bans), set Endpoint to an alternative search URL and Method
 // accordingly. In environments behind a TLS-intercepting proxy, set
 // insecure_skip_verify (or a proxy) so the search can complete.
+//
+// The effective insecure state is the OR of the config InsecureSkipVerify
+// and the TERMROUTER_WEBSEARCH_INSECURE environment variable. Validation
+// checks the effective state, not just the config field, to prevent env-var
+// bypass of public-hosting safeguards.
 type WebSearchConfig struct {
 	// Endpoint overrides the search URL (e.g. an alternative engine or proxy).
 	Endpoint string `yaml:"endpoint,omitempty" json:"endpoint,omitempty"`
@@ -130,6 +338,13 @@ type WebSearchConfig struct {
 	// InsecureSkipVerify disables TLS certificate verification (use only behind
 	// a trusted TLS-intercepting proxy).
 	InsecureSkipVerify bool `yaml:"insecure_skip_verify,omitempty" json:"insecure_skip_verify,omitempty"`
+	// CABundle is an optional path to a CA certificate bundle (PEM) for
+	// verifying custom TLS certificates (e.g. a corporate TLS-intercepting
+	// proxy). When set, the system cert pool is supplemented with these CAs.
+	CABundle string `yaml:"ca_bundle,omitempty" json:"ca_bundle,omitempty"`
+	// UnsafeTLSOverride permits InsecureSkipVerify when public_hosting is
+	// enabled. Must be explicitly set to true; a warning is emitted at startup.
+	UnsafeTLSOverride bool `yaml:"unsafe_tls_override,omitempty" json:"unsafe_tls_override,omitempty"`
 	// Proxy is an optional HTTP(S) proxy URL for all web-search traffic.
 	Proxy string `yaml:"proxy,omitempty" json:"proxy,omitempty"`
 	// TimeoutSeconds bounds each request (default 30).
@@ -138,6 +353,17 @@ type WebSearchConfig struct {
 	// primary Endpoint fails. Used when the default engine is blocked (e.g.
 	// country-level bans). These are infrastructure endpoints, not model data.
 	FallbackEndpoints []string `yaml:"fallback_endpoints,omitempty" json:"fallback_endpoints,omitempty"`
+}
+
+// EffectiveInsecure returns true if either the config InsecureSkipVerify flag
+// is set or the TERMROUTER_WEBSEARCH_INSECURE environment variable is "1".
+// This ensures that an env-var-only bypass cannot circumvent public-hosting
+// safeguards that are validated before runtime construction.
+func (w WebSearchConfig) EffectiveInsecure() bool {
+	if w.InsecureSkipVerify {
+		return true
+	}
+	return os.Getenv("TERMROUTER_WEBSEARCH_INSECURE") == "1"
 }
 
 type ServerConfig struct {
@@ -180,6 +406,9 @@ type ProviderConfig struct {
 	Headers       map[string]string `yaml:"headers,omitempty" json:"headers,omitempty"`
 	Enabled       *bool             `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Timeout       Duration          `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	// Capabilities declares provider-native feature support used by the
+	// optimization layer (currently prompt caching).
+	Capabilities *ProviderCapabilities `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
 }
 
 func (p ProviderConfig) IsEnabled() bool {
@@ -187,6 +416,41 @@ func (p ProviderConfig) IsEnabled() bool {
 		return true
 	}
 	return *p.Enabled
+}
+
+// SanitizedProviderConfig is a safe-for-export copy of ProviderConfig
+// with all secret values redacted.
+type SanitizedProviderConfig struct {
+	Type          string            `json:"type"`
+	BaseURL       string            `json:"base_url,omitempty"`
+	CredentialRef string            `json:"credential_ref,omitempty"`
+	Enabled       *bool             `json:"enabled,omitempty"`
+	Headers       map[string]string `json:"headers,omitempty"`
+}
+
+// SanitizeProviderConfig returns a copy safe for external display.
+// Credential target is redacted after the scheme and all header values
+// are replaced with "[redacted]".
+func SanitizeProviderConfig(p ProviderConfig) SanitizedProviderConfig {
+	s := SanitizedProviderConfig{
+		Type:    p.Type,
+		BaseURL: p.BaseURL,
+		Enabled: p.Enabled,
+	}
+	if p.CredentialRef != "" {
+		if i := strings.Index(p.CredentialRef, "://"); i >= 0 {
+			s.CredentialRef = p.CredentialRef[:i+3] + "[redacted]"
+		} else {
+			s.CredentialRef = "[redacted]"
+		}
+	}
+	if len(p.Headers) > 0 {
+		s.Headers = make(map[string]string, len(p.Headers))
+		for k := range p.Headers {
+			s.Headers[k] = "[redacted]"
+		}
+	}
+	return s
 }
 
 type RouteConfig struct {
@@ -199,10 +463,10 @@ type RouteConfig struct {
 }
 
 type TargetConfig struct {
-	Provider  string   `yaml:"provider" json:"provider"`
-	Model     string   `yaml:"model" json:"model"`
-	Timeout   Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
-	Weight    int      `yaml:"weight,omitempty" json:"weight,omitempty"`
+	Provider string   `yaml:"provider" json:"provider"`
+	Model    string   `yaml:"model" json:"model"`
+	Timeout  Duration `yaml:"timeout,omitempty" json:"timeout,omitempty"`
+	Weight   int      `yaml:"weight,omitempty" json:"weight,omitempty"`
 }
 
 // CandidateConfig is a smart-route candidate target.
@@ -214,15 +478,15 @@ type CandidateConfig struct {
 
 // SmartConfig configures task-aware selection for strategy: smart.
 type SmartConfig struct {
-	Mode                string                 `yaml:"mode,omitempty" json:"mode,omitempty"` // off | shadow | live
-	Policy              string                 `yaml:"policy,omitempty" json:"policy,omitempty"`
-	Classifier          SmartClassifierConfig  `yaml:"classifier,omitempty" json:"classifier,omitempty"`
-	ConfidenceThreshold float64                `yaml:"confidence_threshold,omitempty" json:"confidence_threshold,omitempty"`
-	LowConfidenceTarget string                 `yaml:"low_confidence_target,omitempty" json:"low_confidence_target,omitempty"` // provider:model
-	MinimumTaskMatch    float64                `yaml:"minimum_task_match,omitempty" json:"minimum_task_match,omitempty"`
-	StrictProfiles      *bool                  `yaml:"strict_profiles,omitempty" json:"strict_profiles,omitempty"`
-	SessionAffinity     SessionAffinityConfig  `yaml:"session_affinity,omitempty" json:"session_affinity,omitempty"`
-	Logging             SmartLoggingConfig     `yaml:"logging,omitempty" json:"logging,omitempty"`
+	Mode                string                `yaml:"mode,omitempty" json:"mode,omitempty"` // off | shadow | live
+	Policy              string                `yaml:"policy,omitempty" json:"policy,omitempty"`
+	Classifier          SmartClassifierConfig `yaml:"classifier,omitempty" json:"classifier,omitempty"`
+	ConfidenceThreshold float64               `yaml:"confidence_threshold,omitempty" json:"confidence_threshold,omitempty"`
+	LowConfidenceTarget string                `yaml:"low_confidence_target,omitempty" json:"low_confidence_target,omitempty"` // provider:model
+	MinimumTaskMatch    float64               `yaml:"minimum_task_match,omitempty" json:"minimum_task_match,omitempty"`
+	StrictProfiles      *bool                 `yaml:"strict_profiles,omitempty" json:"strict_profiles,omitempty"`
+	SessionAffinity     SessionAffinityConfig `yaml:"session_affinity,omitempty" json:"session_affinity,omitempty"`
+	Logging             SmartLoggingConfig    `yaml:"logging,omitempty" json:"logging,omitempty"`
 }
 
 type SmartClassifierConfig struct {
@@ -251,17 +515,17 @@ type ModelProfileConfig struct {
 	UserOverrides      *ProfileBaseline `yaml:"user_overrides,omitempty" json:"user_overrides,omitempty"`
 
 	// Legacy flat fields (transient; migrated on Normalize). Not authoritative.
-	Source       string             `yaml:"source,omitempty" json:"-"`
-	Version      string             `yaml:"version,omitempty" json:"-"`
-	Capabilities map[string]float64 `yaml:"capabilities,omitempty" json:"-"`
+	Source       string                `yaml:"source,omitempty" json:"-"`
+	Version      string                `yaml:"version,omitempty" json:"-"`
+	Capabilities map[string]float64    `yaml:"capabilities,omitempty" json:"-"`
 	Properties   ModelPropertiesConfig `yaml:"properties,omitempty" json:"-"`
 }
 
 // ProfileBaseline is one provenance layer of a model profile.
 type ProfileBaseline struct {
-	Version      string                `yaml:"version,omitempty" json:"version,omitempty"`
-	Capabilities map[string]float64    `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
-	Confidence   map[string]float64    `yaml:"confidence,omitempty" json:"confidence,omitempty"`
+	Version      string                 `yaml:"version,omitempty" json:"version,omitempty"`
+	Capabilities map[string]float64     `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
+	Confidence   map[string]float64     `yaml:"confidence,omitempty" json:"confidence,omitempty"`
 	Properties   *ModelPropertiesConfig `yaml:"properties,omitempty" json:"properties,omitempty"`
 }
 
@@ -279,7 +543,7 @@ type ModelPropertiesConfig struct {
 }
 
 type AliasConfig struct {
-	Route  string `yaml:"route,omitempty" json:"route,omitempty"`
+	Route string `yaml:"route,omitempty" json:"route,omitempty"`
 	// Direct target shorthand (provider + model) when no route is used.
 	Provider string `yaml:"provider,omitempty" json:"provider,omitempty"`
 	Model    string `yaml:"model,omitempty" json:"model,omitempty"`
@@ -364,6 +628,7 @@ func Default() *Config {
 		Routes:        map[string]RouteConfig{},
 		Aliases:       map[string]AliasConfig{},
 		ModelProfiles: map[string]ModelProfileConfig{},
+		Optimization:  DefaultOptimization(),
 		Logging: LoggingConfig{
 			Level:         "info",
 			Payloads:      "metadata-only",
@@ -620,7 +885,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.WebSearch.EffectiveInsecure() && c.PublicHosting.Enabled && !c.WebSearch.UnsafeTLSOverride {
+		return fmt.Errorf("web_search.insecure_skip_verify requires web_search.unsafe_tls_override: true in public-hosting mode")
+	}
+
 	if err := c.ValidatePricing(); err != nil {
+		return err
+	}
+
+	if err := c.ValidateOptimization(); err != nil {
 		return err
 	}
 
@@ -641,6 +914,67 @@ func (c *Config) Validate() error {
 			}
 		} else {
 			return fmt.Errorf("alias %q: must set route or provider+model", name)
+		}
+	}
+	return nil
+}
+
+// ValidateOptimization checks the token-optimization configuration.
+func (c *Config) ValidateOptimization() error {
+	o := c.Optimization
+	if !o.Enabled {
+		return nil
+	}
+	if _, err := ParseOptimizationMode(string(o.DefaultMode)); err != nil {
+		return err
+	}
+	if o.TokenEstimation.FallbackCharsPerToken <= 0 {
+		return fmt.Errorf("optimization.token_estimation.fallback_chars_per_token must be > 0")
+	}
+	if o.TokenEstimation.SafetyMultiplier <= 0 {
+		return fmt.Errorf("optimization.token_estimation.safety_multiplier must be > 0")
+	}
+	if o.Conversation.Enabled {
+		if o.Conversation.RecentTurnsFull < 0 {
+			return fmt.Errorf("optimization.conversation.recent_turns_full must be >= 0")
+		}
+		if o.Conversation.TargetTokens > 0 && o.Conversation.TriggerTokens > 0 && o.Conversation.TargetTokens >= o.Conversation.TriggerTokens {
+			return fmt.Errorf("optimization.conversation.target_tokens must be < trigger_tokens")
+		}
+	}
+	switch strings.ToLower(strings.TrimSpace(o.Output.Mode)) {
+	case "", "off", "adaptive":
+	default:
+		return fmt.Errorf("optimization.output.mode must be off or adaptive")
+	}
+	if o.SemanticCompression.Enabled && o.SemanticCompression.FailureMode != "bypass" && o.SemanticCompression.FailureMode != "reject" {
+		return fmt.Errorf("optimization.semantic_compression.failure_mode must be bypass or reject")
+	}
+	for name, comp := range o.Compressors {
+		if !comp.Enabled {
+			continue
+		}
+		switch strings.ToLower(comp.Transport) {
+		case "http", "unix":
+		default:
+			return fmt.Errorf("optimization.compressors.%s: transport must be http or unix", name)
+		}
+		if strings.ToLower(comp.Transport) == "http" {
+			if comp.Endpoint == "" {
+				return fmt.Errorf("optimization.compressors.%s: endpoint is required for http transport", name)
+			}
+			if !comp.AllowNonLoopback {
+				if u, err := url.Parse(comp.Endpoint); err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+					return fmt.Errorf("optimization.compressors.%s: endpoint must be an http(s) URL", name)
+				}
+			}
+		}
+		const maxSafe int = 64 << 20
+		if comp.MaxRequestBytes <= 0 || comp.MaxRequestBytes > maxSafe {
+			return fmt.Errorf("optimization.compressors.%s: max_request_bytes must be > 0 and <= 64MiB", name)
+		}
+		if comp.MaxResponseBytes <= 0 || comp.MaxResponseBytes > maxSafe {
+			return fmt.Errorf("optimization.compressors.%s: max_response_bytes must be > 0 and <= 64MiB", name)
 		}
 	}
 	return nil
@@ -695,12 +1029,16 @@ func (c *Config) ExportSanitized() *Config {
 	out := *c
 	out.Providers = make(map[string]ProviderConfig, len(c.Providers))
 	for k, p := range c.Providers {
-		cp := p
-		if cp.CredentialRef != "" {
-			scheme := strings.SplitN(cp.CredentialRef, "://", 2)[0]
-			cp.CredentialRef = scheme + "://[redacted]"
+		sp := SanitizeProviderConfig(p)
+		out.Providers[k] = ProviderConfig{
+			Type:          sp.Type,
+			BaseURL:       sp.BaseURL,
+			CredentialRef: sp.CredentialRef,
+			Enabled:       sp.Enabled,
+			Headers:       sp.Headers,
+			Timeout:       p.Timeout,
+			Capabilities:  p.Capabilities,
 		}
-		out.Providers[k] = cp
 	}
 	out.Routes = make(map[string]RouteConfig, len(c.Routes))
 	for k, v := range c.Routes {

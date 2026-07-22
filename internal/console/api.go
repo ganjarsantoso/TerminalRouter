@@ -109,4 +109,42 @@ func (s *Server) mountAPI(mux *http.ServeMux) {
 	get("GET /admin/v1/usage/summary", s.handleUsageSummary)
 	get("GET /admin/v1/usage/timeseries", s.handleUsageTimeseries)
 	get("GET /admin/v1/usage/breakdown", s.handleUsageBreakdown)
+
+	// Token optimization
+	get("GET /admin/v1/optimization/status", s.handleOptimizationStatus)
+	mut("POST /admin/v1/optimization/analyze", s.handleOptimizationAnalyze)
+	mut("POST /admin/v1/optimization/dry-run", s.handleOptimizationDryRun)
+	mut("POST /admin/v1/optimization/compare", s.handleOptimizationCompare)
+	get("GET /admin/v1/optimization/report", s.handleOptimizationReport)
+	get("GET /admin/v1/optimization/plugins", s.handleOptimizationPlugins)
+	mut("POST /admin/v1/optimization/plugins/{name}/test", s.handleOptimizationPluginsTest)
+
+	// LUI v0.1 semantic interchange
+	mut("POST /admin/v1/lui/validate", s.handleLUIValidate)
+	mut("POST /admin/v1/lui/render", s.handleLUIRender)
+	get("GET /admin/v1/lui/inspect/{requestID}", s.handleLUIInspect)
+
+	// Quota & Usage (Revision 6)
+	get("GET /admin/v1/quota/summary", s.handleQuotaSummary)
+	get("GET /admin/v1/quota/windows", s.handleQuotaWindows)
+	get("GET /admin/v1/quota/events", s.handleQuotaEvents)
+	mut("POST /admin/v1/quota/refresh", s.handleQuotaRefresh)
+	get("GET /admin/v1/quota/recommendations", s.handleQuotaRecommendations)
+
+	// Provider accounts
+	get("GET /admin/v1/providers/{provider}/accounts", s.handleListAccounts)
+	mut("POST /admin/v1/providers/{provider}/accounts", s.handleCreateAccount)
+	get("GET /admin/v1/providers/{provider}/accounts/{account}", s.handleGetAccount)
+	mut("PATCH /admin/v1/providers/{provider}/accounts/{account}", s.handleUpdateAccount)
+	mut("POST /admin/v1/providers/{provider}/accounts/{account}/test", s.handleTestAccount)
+	mut("POST /admin/v1/providers/{provider}/accounts/{account}/drain", s.handleDrainAccount)
+	mut("POST /admin/v1/providers/{provider}/accounts/{account}/resume", s.handleResumeAccount)
+
+	// Analytics
+	get("GET /admin/v1/analytics/usage", s.handleAnalyticsUsage)
+	get("GET /admin/v1/analytics/cost", s.handleAnalyticsCost)
+	get("GET /admin/v1/analytics/models", s.handleAnalyticsModels)
+	get("GET /admin/v1/analytics/providers", s.handleAnalyticsProviders)
+	get("GET /admin/v1/analytics/trends", s.handleAnalyticsTrends)
+	get("GET /admin/v1/analytics/export", s.handleAnalyticsExport)
 }

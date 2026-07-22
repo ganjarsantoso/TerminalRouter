@@ -263,7 +263,7 @@ func toOpenAIRequest(nreq *normalization.NormalizedRequest, model string, stream
 				"function": map[string]any{
 					"name":        t.Name,
 					"description": t.Description,
-					"parameters":   t.InputSchema,
+					"parameters":  t.InputSchema,
 				},
 			})
 		}

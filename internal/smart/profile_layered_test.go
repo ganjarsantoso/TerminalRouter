@@ -127,8 +127,8 @@ func TestLegacyFlatProfileMigration(t *testing.T) {
 	cfg := config.Default()
 	cfg.ModelProfiles = map[string]config.ModelProfileConfig{
 		"p/m": {
-			Source:  SourceUser,
-			Version: "legacy",
+			Source:       SourceUser,
+			Version:      "legacy",
 			Capabilities: map[string]float64{CapCoding: 9.0},
 			Properties:   config.ModelPropertiesConfig{Privacy: "cloud"},
 		},
@@ -186,5 +186,59 @@ func TestEffectiveProfileConsumedBySmartRoutes(t *testing.T) {
 	if p.Cap(CapCoding) != 9.0 || p.Cap(CapToolUse) != 6.0 || p.Cap(CapGeneral) != 7.5 {
 		t.Fatalf("effective merge wrong: coding=%g tool=%g gen=%g",
 			p.Cap(CapCoding), p.Cap(CapToolUse), p.Cap(CapGeneral))
+	}
+}
+
+func TestAssessmentApplyCannotOverwriteUserOverride(t *testing.T) {
+	// Simulate the CLI modelAssessApply flow: write assessment values into
+	// AssessmentBaseline, then prove user overrides still win on resolution.
+	cfg := config.Default()
+	cfg.ModelProfiles = map[string]config.ModelProfileConfig{
+		"p/m": {
+			ExternalBaseline: &config.ProfileBaseline{
+				Capabilities: map[string]float64{CapCoding: 7.0},
+			},
+			AssessmentBaseline: &config.ProfileBaseline{
+				Capabilities: map[string]float64{CapCoding: 8.0},
+			},
+			UserOverrides: &config.ProfileBaseline{
+				Capabilities: map[string]float64{CapCoding: 9.5},
+			},
+		},
+	}
+	ps := NewProfileStoreFromConfig(cfg, true)
+
+	// Phase 1: before applying new assessment, user override is effective.
+	res := ps.ResolveDetailed("p", "m", "p/m")
+	if f := res.Capabilities[CapCoding]; f.Value != 9.5 || f.Source != SourceUser {
+		t.Fatalf("pre-apply: expected user=9.5, got %+v", f)
+	}
+
+	// Phase 2: simulate modelAssessApply writing new assessment values
+	// (e.g. from a completed assessment run) into AssessmentBaseline.
+	// This mirrors the CLI code in model_profile.go modelAssessApply().
+	mp := cfg.ModelProfiles["p/m"]
+	bl := mp.AssessmentBaseline
+	bl.Version = "assessment-v3"
+	for k, v := range map[string]float64{CapCoding: 7.5, CapToolUse: 6.5} {
+		bl.Capabilities[k] = v
+	}
+	cfg.ModelProfiles["p/m"] = mp
+
+	// Rebuild store from the modified config.
+	ps = NewProfileStoreFromConfig(cfg, true)
+
+	// Phase 3: user override must still win for CapCoding.
+	res = ps.ResolveDetailed("p", "m", "p/m")
+	if f := res.Capabilities[CapCoding]; f.Value != 9.5 || f.Source != SourceUser {
+		t.Fatalf("post-apply: expected user=9.5, got %+v", f)
+	}
+	// CapToolUse was not user-overridden; assessment value is used.
+	if f := res.Capabilities[CapToolUse]; f.Value != 6.5 || f.Source != SourceSelfAssess {
+		t.Fatalf("post-apply: expected assessment=6.5 for tool_use, got %+v", f)
+	}
+	// CapGeneral was not set by assessment or user; external baseline surfaces.
+	if f := res.Capabilities[CapGeneral]; f.Value != 0 {
+		t.Fatalf("expected general to be absent/zero, got %+v", f)
 	}
 }

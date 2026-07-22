@@ -36,7 +36,7 @@ ON CONFLICT(id) DO UPDATE SET
 func (s *Store) LoadExternalProposal(id string) (external.Proposal, bool, error) {
 	var (
 		providerID, modelID, modelIdentity, fieldsJSON, status, registryVersion, createdAt string
-		mandatoryReview                                                                   int
+		mandatoryReview                                                                    int
 	)
 	err := s.db.QueryRow(`
 SELECT provider_id, model_id, model_identity, fields_json, created_at, status, registry_version, mandatory_review
@@ -71,7 +71,7 @@ func (s *Store) ListExternalProposals(status string) ([]external.Proposal, error
 	rows, err := s.db.Query(`
 SELECT id, provider_id, model_id, model_identity, fields_json, created_at, status, registry_version, mandatory_review
 FROM external_profile_proposals
-` + whereStatus(status) + ` ORDER BY created_at DESC`, statusArg(status)...)
+`+whereStatus(status)+` ORDER BY created_at DESC`, statusArg(status)...)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +80,7 @@ FROM external_profile_proposals
 	for rows.Next() {
 		var (
 			id, providerID, modelID, modelIdentity, fieldsJSON, createdAt, st, registryVersion string
-			mandatoryReview                                                              int
+			mandatoryReview                                                                    int
 		)
 		if err := rows.Scan(&id, &providerID, &modelID, &modelIdentity, &fieldsJSON, &createdAt, &st, &registryVersion, &mandatoryReview); err != nil {
 			return nil, err
@@ -180,10 +180,10 @@ func (s *Store) CacheExternalEvidence(recs []external.EvidenceRecord) error {
 	for _, r := range recs {
 		id := fmt.Sprintf("%s|%s|%s|%s", r.ModelIdentity, r.Source, r.Benchmark, time.Now().UTC().Format(time.RFC3339Nano))
 		_, err := tx.Exec(`
-INSERT INTO external_evidence_records (id, source, model_identity, benchmark, value, scale, capability, reported_at, url, notes)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+INSERT INTO external_evidence_records (id, source, model_identity, benchmark, value, scale, capability, reported_at, url, notes, tls_disabled)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `, id, string(r.Source), r.ModelIdentity, r.Benchmark, r.Value, string(r.Scale), string(r.Capability),
-			r.ReportedAt.UTC().Format(time.RFC3339), r.URL, r.Notes)
+			r.ReportedAt.UTC().Format(time.RFC3339), r.URL, r.Notes, boolToInt(r.TLSDisabled))
 		if err != nil {
 			return err
 		}
@@ -195,7 +195,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 // fresher than maxAge. The boolean is false when stale or absent.
 func (s *Store) LoadCachedEvidence(modelIdentity string, maxAge time.Duration) ([]external.EvidenceRecord, bool, error) {
 	rows, err := s.db.Query(`
-SELECT source, benchmark, value, scale, capability, reported_at, url, notes
+SELECT source, benchmark, value, scale, capability, reported_at, url, notes, tls_disabled
 FROM external_evidence_records WHERE model_identity = ? ORDER BY reported_at DESC
 `, modelIdentity)
 	if err != nil {
@@ -207,7 +207,8 @@ FROM external_evidence_records WHERE model_identity = ? ORDER BY reported_at DES
 	for rows.Next() {
 		var source, benchmark, scale, capability, reportedAt, url, notes string
 		var value float64
-		if err := rows.Scan(&source, &benchmark, &value, &scale, &capability, &reportedAt, &url, &notes); err != nil {
+		var tlsDisabled int
+		if err := rows.Scan(&source, &benchmark, &value, &scale, &capability, &reportedAt, &url, &notes, &tlsDisabled); err != nil {
 			return nil, false, err
 		}
 		rt, _ := time.Parse(time.RFC3339, reportedAt)
@@ -224,6 +225,7 @@ FROM external_evidence_records WHERE model_identity = ? ORDER BY reported_at DES
 			ReportedAt:    rt,
 			URL:           url,
 			Notes:         notes,
+			TLSDisabled:   tlsDisabled != 0,
 		})
 	}
 	if len(out) == 0 {

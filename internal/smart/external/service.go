@@ -52,12 +52,12 @@ func NewService(store Provider, searcher Searcher, summarizer Summarizer) *Servi
 // RegistryInfo returns metadata about the bundled methodology/registry.
 func (s *Service) RegistryInfo() RegistryInfo {
 	return RegistryInfo{
-		Version:      registryVersion,
-		UpdatedAt:    registryUpdatedAt,
-		SourceCount:  len(sources),
-		ModelCount:   0,
+		Version:       registryVersion,
+		UpdatedAt:     registryUpdatedAt,
+		SourceCount:   len(sources),
+		ModelCount:    0,
 		EvidenceCount: 0,
-		Sources:      sources,
+		Sources:       sources,
 	}
 }
 
@@ -110,13 +110,18 @@ func (s *Service) Search(ctx context.Context, providerID, modelID string) (*Cons
 		}
 	}
 
+	tlsDisabled := false
+	if tp, ok := s.searcher.(TLSProvenance); ok {
+		tlsDisabled = tp.TLSVerificationDisabled()
+	}
+
 	var recs []EvidenceRecord
 	if s.summarizer != nil {
-		recs = summarizeEvidence(ctx, s.summarizer, s.searcher, id, all)
+		recs = summarizeEvidence(ctx, s.summarizer, s.searcher, id, all, tlsDisabled)
 	}
 	if len(recs) == 0 {
 		// Fallback to regex extraction when no summarizer is configured or it found nothing.
-		recs = extractEvidence(id, all)
+		recs = extractEvidence(id, all, tlsDisabled)
 	}
 	if len(recs) == 0 {
 		// Distinguish "search could not run at all" from "ran but found nothing".
@@ -170,13 +175,13 @@ func (s *Service) BuildProposal(ctx context.Context, providerID, modelID string,
 		return nil, false, nil
 	}
 	p := Proposal{
-		ID:             uuid.NewString(),
-		ProviderID:     providerID,
-		ModelID:        modelID,
-		ModelIdentity:  cp.ModelIdentity,
-		Fields:         fields,
-		Overall:        cp.Overall,
-		Confidence:     cp.Confidence,
+		ID:              uuid.NewString(),
+		ProviderID:      providerID,
+		ModelID:         modelID,
+		ModelIdentity:   cp.ModelIdentity,
+		Fields:          fields,
+		Overall:         cp.Overall,
+		Confidence:      cp.Confidence,
 		Sources:         cp.Sources,
 		CreatedAt:       time.Now().UTC(),
 		Status:          "pending",

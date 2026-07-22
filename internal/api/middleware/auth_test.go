@@ -13,9 +13,9 @@ import (
 
 // fakeStore is a minimal Store stub for auth tests.
 type fakeStore struct {
-	keys  []storage.ClientKey
+	keys        []storage.ClientKey
 	getByPrefix func(prefix string) []storage.ClientKey
-	all        []storage.ClientKey
+	all         []storage.ClientKey
 }
 
 func (f *fakeStore) FindEnabledKeys(ctx context.Context) ([]storage.ClientKey, error) {

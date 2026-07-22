@@ -3,6 +3,7 @@ package external
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"html"
 	"io"
@@ -20,7 +21,8 @@ import (
 // DefaultSearcher returns the default live web searcher (DuckDuckGo HTML,
 // no API key required). It is used by NewService when no searcher is injected.
 func DefaultSearcher() Searcher {
-	return NewWebSearcher(config.WebSearchConfig{})
+	ws, _ := NewWebSearcher(config.WebSearchConfig{})
+	return ws
 }
 
 // defaultFallbackEndpoints are public SearXNG instances tried (in order) when
@@ -39,16 +41,17 @@ var defaultFallbackEndpoints = []string{
 }
 
 // NewWebSearcher builds a WebSearcher from configuration. It honors a custom
-// endpoint, an optional proxy, and insecure_skip_verify (for TLS-intercepting
-// proxies). There is no hardcoded model or engine; the default endpoint is
-// DuckDuckGo's public HTML endpoint. The TERMROUTER_WEBSEARCH_INSECURE=1
-// environment variable also enables insecure_skip_verify regardless of config.
-func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
+// endpoint, an optional proxy, ca_bundle, and insecure_skip_verify (for
+// TLS-intercepting proxies). There is no hardcoded model or engine; the default
+// endpoint is DuckDuckGo's public HTML endpoint. The
+// TERMROUTER_WEBSEARCH_INSECURE=1 environment variable also enables
+// insecure_skip_verify regardless of config.
+func NewWebSearcher(cfg config.WebSearchConfig) (*WebSearcher, error) {
 	timeout := time.Duration(cfg.TimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	insecure := cfg.InsecureSkipVerify || os.Getenv("TERMROUTER_WEBSEARCH_INSECURE") == "1"
+	insecure := cfg.EffectiveInsecure()
 	transport := &http.Transport{
 		// Picky transparent proxies often drop keep-alive/idle connections,
 		// surfacing as EOF. Disable keep-alives and HTTP/2 to be safe.
@@ -60,17 +63,32 @@ func NewWebSearcher(cfg config.WebSearchConfig) *WebSearcher {
 			transport.Proxy = http.ProxyURL(pu)
 		}
 	}
+	if cfg.CABundle != "" || insecure {
+		transport.TLSClientConfig = &tls.Config{}
+	}
 	if insecure {
-		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport.TLSClientConfig.InsecureSkipVerify = true
 		log.Printf("[external] web search TLS verification disabled (insecure_skip_verify); this is for TLS-intercepting proxies only")
+	}
+	if cfg.CABundle != "" {
+		caCert, err := os.ReadFile(cfg.CABundle)
+		if err != nil {
+			return nil, fmt.Errorf("read CA bundle: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("CA bundle contains no certificates")
+		}
+		transport.TLSClientConfig.RootCAs = caPool
 	}
 	return &WebSearcher{
 		Client:            &http.Client{Timeout: timeout, Transport: transport},
 		Endpoint:          cfg.Endpoint,
 		Method:            cfg.Method,
 		FallbackEndpoints: cfg.FallbackEndpoints,
+		TLSDisabled:       insecure,
 		safe:              NewSafeFetcher(DefaultFetchLimits(), &http.Client{Timeout: timeout, Transport: transport}),
-	}
+	}, nil
 }
 
 // WebSearcher performs unauthenticated web searches and returns result
@@ -83,8 +101,16 @@ type WebSearcher struct {
 	Method string
 	// FallbackEndpoints are alternative endpoints tried when the primary fails.
 	FallbackEndpoints []string
+	// TLSDisabled is true when InsecureSkipVerify was active, meaning TLS
+	// certificate verification was disabled for this searcher.
+	TLSDisabled bool
 	// safe enforces SSRF and content controls on page fetches (§17).
 	safe *SafeFetcher
+}
+
+// TLSVerificationDisabled reports whether TLS verification was disabled.
+func (w *WebSearcher) TLSVerificationDisabled() bool {
+	return w.TLSDisabled
 }
 
 type ddgResult struct {

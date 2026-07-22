@@ -61,9 +61,9 @@ func credMeta(ref string) map[string]any {
 		status = "available"
 	}
 	return map[string]any{
-		"source":   scheme + "://",
-		"status":   status,
-		"ref":      redactRef(ref),
+		"source": scheme + "://",
+		"status": status,
+		"ref":    redactRef(ref),
 	}
 }
 
@@ -93,26 +93,26 @@ func (s *Server) handleGetProvider(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name":            id,
-		"type":            p.Type,
-		"base_url":        p.BaseURL,
-		"enabled":         p.IsEnabled(),
-		"credential":      credMeta(p.CredentialRef),
-		"custom_headers":  p.Headers,
-		"timeout":         p.Timeout.Duration().String(),
+		"name":              id,
+		"type":              p.Type,
+		"base_url":          p.BaseURL,
+		"enabled":           p.IsEnabled(),
+		"credential":        credMeta(p.CredentialRef),
+		"custom_headers":    p.Headers,
+		"timeout":           p.Timeout.Duration().String(),
 		"discovered_models": discovered,
 	})
 }
 
 func (s *Server) handleCreateProvider(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name         string            `json:"name"`
-		Type         string            `json:"type"`
-		BaseURL      string            `json:"base_url"`
-		Credential   map[string]string `json:"credential"` // {"method":"env|vault|keyring|none", "value":"..."}
-		Enabled      *bool             `json:"enabled"`
-		Headers      map[string]string `json:"custom_headers"`
-		Timeout      string            `json:"timeout"`
+		Name       string            `json:"name"`
+		Type       string            `json:"type"`
+		BaseURL    string            `json:"base_url"`
+		Credential map[string]string `json:"credential"` // {"method":"env|vault|keyring|none", "value":"..."}
+		Enabled    *bool             `json:"enabled"`
+		Headers    map[string]string `json:"custom_headers"`
+		Timeout    string            `json:"timeout"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
@@ -376,7 +376,9 @@ func (s *Server) handleTestProvider(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stages := []map[string]any{}
-	add := func(stage string, ok bool, detail string) { stages = append(stages, map[string]any{"stage": stage, "ok": ok, "detail": detail}) }
+	add := func(stage string, ok bool, detail string) {
+		stages = append(stages, map[string]any{"stage": stage, "ok": ok, "detail": detail})
+	}
 	add("dns_resolution", true, "resolved")
 	if err := adapter.Validate(r.Context(), p, secret); err != nil {
 		add("authentication", false, sanitizeErr(err))

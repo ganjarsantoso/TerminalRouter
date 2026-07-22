@@ -49,8 +49,8 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, map[string]any{
 		"error": map[string]any{
-			"code":      code,
-			"message":   message,
+			"code":       code,
+			"message":    message,
 			"request_id": "",
 		},
 	})
@@ -100,7 +100,7 @@ type consoleError struct {
 	msg string
 }
 
-func errConflict(msg string) error { return &consoleError{msg} }
+func errConflict(msg string) error  { return &consoleError{msg} }
 func errNotFound(kind string) error { return &consoleError{msg: kind + " not found"} }
 
 func (e *consoleError) Error() string { return e.msg }

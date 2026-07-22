@@ -23,12 +23,12 @@ func TestExternalProposalMandatoryReviewRoundTrip(t *testing.T) {
 	defer store.Close()
 
 	p := external.Proposal{
-		ID:             "prop-1",
-		ProviderID:     "openai",
-		ModelID:        "gpt-5",
-		ModelIdentity:  "openai/gpt-5",
-		Fields:         []external.ProposalField{{Capability: "reasoning", Proposed: 8.0}},
-		Status:         "pending",
+		ID:              "prop-1",
+		ProviderID:      "openai",
+		ModelID:         "gpt-5",
+		ModelIdentity:   "openai/gpt-5",
+		Fields:          []external.ProposalField{{Capability: "reasoning", Proposed: 8.0}},
+		Status:          "pending",
 		RegistryVersion: "v1",
 		MandatoryReview: true,
 	}

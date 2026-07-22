@@ -13,8 +13,8 @@ import (
 
 // FetchLimits bounds a single evidence page fetch (§17 content controls).
 type FetchLimits struct {
-	MaxBytes      int64         // max decompressed body size (0 = default)
-	MaxRedirects  int           // max redirect hops (0 = default)
+	MaxBytes       int64         // max decompressed body size (0 = default)
+	MaxRedirects   int           // max redirect hops (0 = default)
 	ConnectTimeout time.Duration // (reserved) dial timeout
 	HeaderTimeout  time.Duration // (reserved) header timeout
 	TotalTimeout   time.Duration // overall request timeout
@@ -210,9 +210,9 @@ func allowedContentType(ct string) bool {
 // for scoring weight by the caller via IsApprovedURL) but are reported via the
 // returned error's Unverified flag.
 type ValidationResult struct {
-	OK        bool
+	OK         bool
 	Unverified bool
-	Reason    string
+	Reason     string
 }
 
 // ValidateEvidenceRecord checks a single evidence record against the registry

@@ -8,7 +8,9 @@ import (
 // summarizeEvidence uses the LLM summarizer to convert fetched search results
 // into structured evidence records. The searcher (if it implements PageFetcher)
 // enriches results with page text; otherwise the snippet text is used.
-func summarizeEvidence(ctx context.Context, sum Summarizer, srch Searcher, id ModelIdentity, results []SearchResult) []EvidenceRecord {
+// tlsDisabled should be true when the evidence was retrieved with TLS
+// certificate verification disabled.
+func summarizeEvidence(ctx context.Context, sum Summarizer, srch Searcher, id ModelIdentity, results []SearchResult, tlsDisabled bool) []EvidenceRecord {
 	pages := resultsToPages(srch, results)
 	if len(pages) == 0 {
 		return nil
@@ -58,6 +60,7 @@ func summarizeEvidence(ctx context.Context, sum Summarizer, srch Searcher, id Mo
 			ReportedAt:    registryUpdatedAt,
 			URL:           c.Evidence,
 			Notes:         c.Note,
+			TLSDisabled:   tlsDisabled,
 		})
 	}
 	return recs

@@ -64,22 +64,22 @@ func (s *ProfileStore) Resolve(providerID, modelID, profileID string) (ModelProf
 
 // ResolvedField documents one capability after layered resolution.
 type ResolvedField struct {
-	Value         float64 `json:"value"`
-	Source        string  `json:"source"`
-	BaselineValue float64 `json:"baseline_value"`
-	BaselineSource string `json:"baseline_source"`
-	Confidence    float64 `json:"confidence"`
+	Value          float64 `json:"value"`
+	Source         string  `json:"source"`
+	BaselineValue  float64 `json:"baseline_value"`
+	BaselineSource string  `json:"baseline_source"`
+	Confidence     float64 `json:"confidence"`
 }
 
 // ResolvedProfile is the effective profile with per-field provenance.
 type ResolvedProfile struct {
-	ProviderID string                  `json:"provider_id"`
-	ModelID    string                  `json:"model_id"`
-	ProfileID  string                  `json:"profile_id,omitempty"`
-	Found      bool                    `json:"found"`
-	Effective  ModelProfile            `json:"effective"`
-	Capabilities map[string]ResolvedField `json:"capabilities"`
-	PropertySources map[string]string  `json:"property_sources,omitempty"`
+	ProviderID      string                   `json:"provider_id"`
+	ModelID         string                   `json:"model_id"`
+	ProfileID       string                   `json:"profile_id,omitempty"`
+	Found           bool                     `json:"found"`
+	Effective       ModelProfile             `json:"effective"`
+	Capabilities    map[string]ResolvedField `json:"capabilities"`
+	PropertySources map[string]string        `json:"property_sources,omitempty"`
 }
 
 func defaultConfidence(source string) float64 {
@@ -136,18 +136,18 @@ func (s *ProfileStore) ResolveDetailed(providerID, modelID, profileID string) Re
 	keys = append(keys, ProfileKey(providerID, modelID), modelID)
 
 	res := ResolvedProfile{
-		ProviderID:     providerID,
-		ModelID:        modelID,
-		ProfileID:      profileID,
-		Capabilities:   map[string]ResolvedField{},
+		ProviderID:      providerID,
+		ModelID:         modelID,
+		ProfileID:       profileID,
+		Capabilities:    map[string]ResolvedField{},
 		PropertySources: map[string]string{},
 		Effective: ModelProfile{
-			ID:          ProfileKey(providerID, modelID),
-			ProviderID:  providerID,
-			ModelID:     modelID,
+			ID:           ProfileKey(providerID, modelID),
+			ProviderID:   providerID,
+			ModelID:      modelID,
 			Capabilities: map[string]float64{},
-			Confidence:  map[string]float64{},
-			Source:      SourceUnknown,
+			Confidence:   map[string]float64{},
+			Source:       SourceUnknown,
 		},
 	}
 
@@ -184,11 +184,11 @@ func (s *ProfileStore) ResolveDetailed(providerID, modelID, profileID string) Re
 			conf = c
 		}
 		res.Capabilities[cap] = ResolvedField{
-			Value:         value,
-			Source:        source,
-			BaselineValue: baselineValue,
+			Value:          value,
+			Source:         source,
+			BaselineValue:  baselineValue,
 			BaselineSource: baselineSource,
-			Confidence:    conf,
+			Confidence:     conf,
 		}
 		res.Effective.Capabilities[cap] = value
 		res.Effective.Confidence[cap] = conf
@@ -221,11 +221,21 @@ func (s *ProfileStore) ResolveDetailed(providerID, modelID, profileID string) Re
 		}
 	}
 	applyProp(
-		func(p *ModelProperties) (any, bool) { if p.Vision == nil { return nil, false }; return *p.Vision, true },
+		func(p *ModelProperties) (any, bool) {
+			if p.Vision == nil {
+				return nil, false
+			}
+			return *p.Vision, true
+		},
 		func(p *ModelProperties, v any) { b := v.(bool); p.Vision = &b }, "vision")
 	applyParamBool := func(name string, get func(*ModelProperties) *bool, set func(*ModelProperties, *bool)) {
 		applyProp(
-			func(p *ModelProperties) (any, bool) { if get(p) == nil { return nil, false }; return *get(p), true },
+			func(p *ModelProperties) (any, bool) {
+				if get(p) == nil {
+					return nil, false
+				}
+				return *get(p), true
+			},
 			func(p *ModelProperties, v any) { b := v.(bool); set(p, &b) }, name)
 	}
 	applyParamBool("tools", func(p *ModelProperties) *bool { return p.Tools }, func(p *ModelProperties, b *bool) { p.Tools = b })
@@ -233,19 +243,44 @@ func (s *ProfileStore) ResolveDetailed(providerID, modelID, profileID string) Re
 	applyParamBool("structured_output", func(p *ModelProperties) *bool { return p.StructuredOutput }, func(p *ModelProperties, b *bool) { p.StructuredOutput = b })
 	applyParamBool("streaming", func(p *ModelProperties) *bool { return p.Streaming }, func(p *ModelProperties, b *bool) { p.Streaming = b })
 	applyProp(
-		func(p *ModelProperties) (any, bool) { if p.ContextWindow == 0 { return nil, false }; return p.ContextWindow, true },
+		func(p *ModelProperties) (any, bool) {
+			if p.ContextWindow == 0 {
+				return nil, false
+			}
+			return p.ContextWindow, true
+		},
 		func(p *ModelProperties, v any) { p.ContextWindow = v.(int) }, "context_window")
 	applyProp(
-		func(p *ModelProperties) (any, bool) { if p.MaxOutputTokens == 0 { return nil, false }; return p.MaxOutputTokens, true },
+		func(p *ModelProperties) (any, bool) {
+			if p.MaxOutputTokens == 0 {
+				return nil, false
+			}
+			return p.MaxOutputTokens, true
+		},
 		func(p *ModelProperties, v any) { p.MaxOutputTokens = v.(int) }, "max_output_tokens")
 	applyProp(
-		func(p *ModelProperties) (any, bool) { if p.CostTier == 0 { return nil, false }; return p.CostTier, true },
+		func(p *ModelProperties) (any, bool) {
+			if p.CostTier == 0 {
+				return nil, false
+			}
+			return p.CostTier, true
+		},
 		func(p *ModelProperties, v any) { p.CostTier = v.(int) }, "cost_tier")
 	applyProp(
-		func(p *ModelProperties) (any, bool) { if p.LatencyTier == 0 { return nil, false }; return p.LatencyTier, true },
+		func(p *ModelProperties) (any, bool) {
+			if p.LatencyTier == 0 {
+				return nil, false
+			}
+			return p.LatencyTier, true
+		},
 		func(p *ModelProperties, v any) { p.LatencyTier = v.(int) }, "latency_tier")
 	applyProp(
-		func(p *ModelProperties) (any, bool) { if p.Privacy == "" { return nil, false }; return p.Privacy, true },
+		func(p *ModelProperties) (any, bool) {
+			if p.Privacy == "" {
+				return nil, false
+			}
+			return p.Privacy, true
+		},
 		func(p *ModelProperties, v any) { p.Privacy = v.(string) }, "privacy")
 
 	res.Effective.Properties = resolvedProps

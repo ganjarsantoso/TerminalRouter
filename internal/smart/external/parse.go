@@ -10,11 +10,11 @@ import (
 // benchmarkPattern describes how to recognize a benchmark figure in free text
 // and which capability/source it maps to.
 type benchmarkPattern struct {
-	re       *regexp.Regexp
-	source   SourceID
-	cap      CapabilityKey
-	scale    ScaleKind
-	label    string
+	re     *regexp.Regexp
+	source SourceID
+	cap    CapabilityKey
+	scale  ScaleKind
+	label  string
 }
 
 // pct extracts a percentage value near a benchmark keyword. We look for the
@@ -91,8 +91,9 @@ var benchmarkPatterns = []benchmarkPattern{
 }
 
 // extractEvidence pulls benchmark figures from a set of search results for a
-// given canonical model identity.
-func extractEvidence(id ModelIdentity, results []SearchResult) []EvidenceRecord {
+// given canonical model identity. tlsDisabled should be true when the evidence
+// was retrieved with TLS certificate verification disabled.
+func extractEvidence(id ModelIdentity, results []SearchResult, tlsDisabled bool) []EvidenceRecord {
 	var out []EvidenceRecord
 	seen := map[string]bool{}
 	matchTerms := modelMatchTerms(id)
@@ -153,6 +154,7 @@ func extractEvidence(id ModelIdentity, results []SearchResult) []EvidenceRecord 
 				Capability:    p.cap,
 				ReportedAt:    registryUpdatedAt,
 				URL:           r.URL,
+				TLSDisabled:   tlsDisabled,
 			})
 		}
 	}

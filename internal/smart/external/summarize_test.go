@@ -71,7 +71,7 @@ func TestSummarizeEvidenceIndependentPublishedIdentity(t *testing.T) {
 
 	recs := summarizeEvidence(context.Background(), sum, srch, id, []SearchResult{
 		{Snippet: "GPT-5 preview scores", URL: "https://livebench.ai/gpt5-preview"},
-	})
+	}, false)
 	if len(recs) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(recs))
 	}
@@ -111,7 +111,7 @@ func TestSummarizeEvidenceSameModelStaysExact(t *testing.T) {
 	}}
 	recs := summarizeEvidence(context.Background(), sum, srch, id, []SearchResult{
 		{Snippet: "GPT-5 scores", URL: "https://livebench.ai/gpt5"},
-	})
+	}, false)
 	if len(recs) != 1 {
 		t.Fatalf("expected 1 record, got %d", len(recs))
 	}

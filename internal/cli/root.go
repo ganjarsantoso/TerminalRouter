@@ -10,9 +10,9 @@ import (
 )
 
 var (
-	flagHome    string
-	flagJSON    bool
-	appVersion  string
+	flagHome   string
+	flagJSON   bool
+	appVersion string
 )
 
 // Execute runs the root command.
@@ -46,6 +46,9 @@ func Execute(version string) error {
 		newTestCmd(),
 		newConsoleCmd(),
 		newVersionCmd(),
+		newOptimizeCmd(),
+		newLUICmd(),
+		newQuotaCmd(),
 	)
 	return root.Execute()
 }

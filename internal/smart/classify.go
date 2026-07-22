@@ -10,30 +10,30 @@ import (
 
 // RequestFeatures are extracted signals used by the heuristic classifier.
 type RequestFeatures struct {
-	ApproxTokens       int
-	TurnCount          int
-	SystemLen          int
-	UserText           string
-	HasCode            bool
-	CodeLangHints      []string
-	HasDebugMarkers    bool
-	HasMath            bool
-	HasProof           bool
-	HasVision          bool
-	HasTools           bool
-	ToolsRequired      bool
-	HasStructuredOut   bool
-	ConstraintCount    int
-	HasArchitecture    bool
-	HasComparison      bool
-	WantsShortAnswer   bool
-	HasWritingMarkers  bool
-	HasSummaryMarkers  bool
-	HasExtractMarkers  bool
+	ApproxTokens        int
+	TurnCount           int
+	SystemLen           int
+	UserText            string
+	HasCode             bool
+	CodeLangHints       []string
+	HasDebugMarkers     bool
+	HasMath             bool
+	HasProof            bool
+	HasVision           bool
+	HasTools            bool
+	ToolsRequired       bool
+	HasStructuredOut    bool
+	ConstraintCount     int
+	HasArchitecture     bool
+	HasComparison       bool
+	WantsShortAnswer    bool
+	HasWritingMarkers   bool
+	HasSummaryMarkers   bool
+	HasExtractMarkers   bool
 	HasTranslateMarkers bool
-	HasReviewMarkers   bool
-	HasGenCodeMarkers  bool
-	EstimatedContext   int
+	HasReviewMarkers    bool
+	HasGenCodeMarkers   bool
+	EstimatedContext    int
 }
 
 var (

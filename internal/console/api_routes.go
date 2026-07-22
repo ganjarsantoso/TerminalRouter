@@ -22,11 +22,11 @@ func (s *Server) handleListRoutes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		entry := map[string]any{
-			"name":        name,
-			"strategy":    rt.Strategy,
-			"targets":     rt.Targets,
-			"candidates":  cands,
-			"default":     rt.Default,
+			"name":       name,
+			"strategy":   rt.Strategy,
+			"targets":    rt.Targets,
+			"candidates": cands,
+			"default":    rt.Default,
 		}
 		if rt.Smart != nil {
 			entry["smart"] = rt.Smart
@@ -55,12 +55,12 @@ func (s *Server) handleGetRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 type routeInput struct {
-	Name        string                     `json:"name"`
-	Strategy    string                     `json:"strategy"`
-	Targets     []config.TargetConfig      `json:"targets"`
-	Candidates  []config.CandidateConfig   `json:"candidates"`
-	Smart       *config.SmartConfig        `json:"smart"`
-	Default     string                     `json:"default"`
+	Name       string                   `json:"name"`
+	Strategy   string                   `json:"strategy"`
+	Targets    []config.TargetConfig    `json:"targets"`
+	Candidates []config.CandidateConfig `json:"candidates"`
+	Smart      *config.SmartConfig      `json:"smart"`
+	Default    string                   `json:"default"`
 }
 
 func (s *Server) handleCreateRoute(w http.ResponseWriter, r *http.Request) {

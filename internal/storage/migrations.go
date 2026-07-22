@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS client_keys (
     allowed_direct_models TEXT, -- JSON array; empty/null with allow_direct_models=1 = unrestricted
     expires_at TEXT,
     portable INTEGER NOT NULL DEFAULT 0,
+    optimization_mode TEXT, -- per-key maximum optimization mode (off|safe|balanced|aggressive); empty = server default
     created_at TEXT NOT NULL,
     rotated_at TEXT,
     disabled_at TEXT
@@ -215,9 +216,187 @@ CREATE TABLE IF NOT EXISTS external_registry_versions (
     model_count INTEGER NOT NULL,
     evidence_count INTEGER NOT NULL
 );
+
+-- Optimization decision records (no raw prompts). Privacy-conscious: only
+-- counts, action names, mode, and provenance are stored. Cache fields use
+-- distinct labels: cache_opportunity_tokens_est (estimated prefix stabilization)
+-- is separate from cache_read_tokens_actual / cache_write_tokens_actual
+-- (provider-reported). The old cached_input_tokens / cache_write_tokens columns
+-- are deprecated but retained for databases that have them.
+CREATE TABLE IF NOT EXISTS request_optimizations (
+    request_id TEXT PRIMARY KEY,
+    route_name TEXT,
+    client_key_id TEXT,
+    provider_id TEXT,
+    model_id TEXT,
+    mode_requested TEXT,
+    mode_applied TEXT,
+    lui_version TEXT,
+    renderer TEXT,
+    estimators_json TEXT,
+    optimizers_json TEXT,
+    input_tokens_before INTEGER,
+    input_tokens_after_estimated INTEGER,
+    provider_input_tokens_actual INTEGER,
+    provider_output_tokens_actual INTEGER,
+    cache_status TEXT,
+    cache_opportunity_tokens_est INTEGER,
+    cache_read_tokens_actual INTEGER,
+    cache_write_tokens_actual INTEGER,
+    cache_source TEXT,
+    deprecated_cached_input_tokens INTEGER,
+    deprecated_cache_write_tokens INTEGER,
+    compression_input_tokens INTEGER,
+    compression_output_tokens INTEGER,
+    gross_saving_usd REAL,
+    optimizer_cost_usd REAL,
+    net_saving_usd REAL,
+    added_latency_ms INTEGER,
+    loss_class TEXT,
+    bypassed INTEGER NOT NULL DEFAULT 0,
+    bypass_reason TEXT,
+    quality_status TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_request_optimizations_created ON request_optimizations(created_at);
+CREATE INDEX IF NOT EXISTS idx_request_optimizations_provider ON request_optimizations(provider_id, model_id);
+
+-- Revision 6: quota tracking and analytics
+CREATE TABLE IF NOT EXISTS quota_snapshots (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    model_id TEXT,
+    definition_id TEXT,
+    dimension TEXT NOT NULL,
+    window_start TEXT,
+    window_end TEXT,
+    reset_at TEXT,
+    limit_value REAL,
+    used_value REAL,
+    remaining_value REAL,
+    reserved_value REAL,
+    source TEXT NOT NULL,
+    confidence REAL,
+    observed_at TEXT NOT NULL,
+    stale_after TEXT,
+    metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_quota_snapshots_provider ON quota_snapshots(provider_id, account_id, observed_at);
+CREATE INDEX IF NOT EXISTS idx_quota_snapshots_definition ON quota_snapshots(definition_id, observed_at);
+
+CREATE TABLE IF NOT EXISTS quota_events (
+    id TEXT PRIMARY KEY,
+    event_type TEXT NOT NULL,
+    provider_id TEXT,
+    account_id TEXT,
+    model_id TEXT,
+    dimension TEXT,
+    window_id TEXT,
+    source TEXT,
+    status TEXT,
+    message TEXT,
+    request_id TEXT,
+    created_at TEXT NOT NULL,
+    metadata_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_quota_events_created ON quota_events(created_at);
+
+CREATE TABLE IF NOT EXISTS account_routing_state (
+    provider_id TEXT NOT NULL,
+    route_id TEXT NOT NULL,
+    last_account_id TEXT,
+    sequence INTEGER NOT NULL DEFAULT 0,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (provider_id, route_id)
+);
+
+CREATE TABLE IF NOT EXISTS provider_account_state (
+    provider_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    draining INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    updated_at TEXT NOT NULL,
+    metadata_json TEXT,
+    PRIMARY KEY (provider_id, account_id)
+);
+
+CREATE TABLE IF NOT EXISTS usage_rollups_hourly (
+    bucket_start TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
+    account_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    route_alias TEXT NOT NULL DEFAULT '',
+    client_key_id TEXT NOT NULL DEFAULT '',
+    requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd REAL NOT NULL DEFAULT 0,
+    billed_cost_usd REAL NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    throttles INTEGER NOT NULL DEFAULT 0,
+    opt_savings_usd REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (bucket_start, provider_id, account_id, model_id, route_alias, client_key_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_usage_rollups_hourly_bucket ON usage_rollups_hourly(bucket_start, provider_id, account_id);
+
+CREATE TABLE IF NOT EXISTS usage_rollups_daily (
+    bucket_start TEXT NOT NULL,
+    provider_id TEXT NOT NULL DEFAULT '',
+    account_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    route_alias TEXT NOT NULL DEFAULT '',
+    client_key_id TEXT NOT NULL DEFAULT '',
+    requests INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cached_tokens INTEGER NOT NULL DEFAULT 0,
+    estimated_cost_usd REAL NOT NULL DEFAULT 0,
+    billed_cost_usd REAL NOT NULL DEFAULT 0,
+    errors INTEGER NOT NULL DEFAULT 0,
+    throttles INTEGER NOT NULL DEFAULT 0,
+    opt_savings_usd REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (bucket_start, provider_id, account_id, model_id, route_alias, client_key_id)
+);
+
+CREATE TABLE IF NOT EXISTS subscription_plans (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    monthly_price REAL,
+    currency TEXT NOT NULL DEFAULT 'USD',
+    allowance_json TEXT,
+    billing_cycle_anchor TEXT,
+    renewal_rule_json TEXT,
+    overage_allowed INTEGER NOT NULL DEFAULT 0,
+    overage_pricing_source TEXT,
+    source TEXT NOT NULL DEFAULT 'manual_configuration',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cost_reconciliations (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    period_start TEXT NOT NULL,
+    period_end TEXT NOT NULL,
+    local_total REAL,
+    provider_total REAL,
+    delta REAL,
+    source TEXT,
+    observed_at TEXT NOT NULL,
+    notes TEXT
+);
 `
 
-const currentSchemaVersion = 9
+const currentSchemaVersion = 13
 
 // migrationSQLv6 adds per-key public-hosting policy columns and client labels.
 // Applied for databases created before schema version 6 (CREATE IF NOT EXISTS
@@ -251,4 +430,39 @@ var migrationSQLv8 = []string{
 // (§18) so it survives a load/apply round-trip and cannot be silently cleared.
 var migrationSQLv9 = []string{
 	`ALTER TABLE external_profile_proposals ADD COLUMN mandatory_review INTEGER NOT NULL DEFAULT 0`,
+}
+
+// migrationSQLv10 adds the per-key optimization policy column (the
+// request_optimizations table itself is created idempotently by schemaSQL).
+var migrationSQLv10 = []string{
+	`ALTER TABLE client_keys ADD COLUMN optimization_mode TEXT`,
+}
+
+// migrationSQLv11 adds account attribution on request_log. Quota tables are
+// created idempotently by schemaSQL (CREATE TABLE IF NOT EXISTS).
+var migrationSQLv11 = []string{
+	`ALTER TABLE request_log ADD COLUMN account_id TEXT`,
+	`CREATE INDEX IF NOT EXISTS idx_request_log_account ON request_log(account_id, timestamp)`,
+	`CREATE INDEX IF NOT EXISTS idx_request_log_provider_ts ON request_log(provider_id, timestamp)`,
+	`CREATE INDEX IF NOT EXISTS idx_request_log_model_ts ON request_log(upstream_model, timestamp)`,
+}
+
+// migrationSQLv12 adds TLS provenance tracking to cached evidence records.
+var migrationSQLv12 = []string{
+	`ALTER TABLE external_evidence_records ADD COLUMN tls_disabled INTEGER NOT NULL DEFAULT 0`,
+}
+
+// migrationSQLv13 adds cache-estimate/actual separation columns to
+// request_optimizations. Cache status, source, and separate estimate/actual
+// token counts replace the single cached_input_tokens / cache_write_tokens
+// columns which are retained as deprecated_cached_input_tokens /
+// deprecated_cache_write_tokens.
+var migrationSQLv13 = []string{
+	`ALTER TABLE request_optimizations ADD COLUMN cache_status TEXT`,
+	`ALTER TABLE request_optimizations ADD COLUMN cache_opportunity_tokens_est INTEGER`,
+	`ALTER TABLE request_optimizations ADD COLUMN cache_read_tokens_actual INTEGER`,
+	`ALTER TABLE request_optimizations ADD COLUMN cache_write_tokens_actual INTEGER`,
+	`ALTER TABLE request_optimizations ADD COLUMN cache_source TEXT`,
+	`ALTER TABLE request_optimizations ADD COLUMN deprecated_cached_input_tokens INTEGER`,
+	`ALTER TABLE request_optimizations ADD COLUMN deprecated_cache_write_tokens INTEGER`,
 }

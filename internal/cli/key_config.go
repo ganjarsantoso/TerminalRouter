@@ -10,9 +10,14 @@ import (
 	"github.com/termrouter/termrouter/internal/app"
 	"github.com/termrouter/termrouter/internal/config"
 	"github.com/termrouter/termrouter/internal/credentials"
+	"github.com/termrouter/termrouter/internal/observability"
 	"github.com/termrouter/termrouter/internal/storage"
 	"gopkg.in/yaml.v3"
 )
+
+// unsafeUnrestrictedPortableHelp describes the break-glass flag that permits
+// writing a portable key without mandatory public-hosting controls.
+const unsafeUnrestrictedPortableHelp = "Allow writing a portable key that lacks one or more mandatory public-hosting controls. This weakens security and financial protection and should only be used for deliberate break-glass recovery."
 
 func newKeyCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "key", Short: "Manage router client API keys"}
@@ -52,7 +57,7 @@ For public VPS / shared-agent use, create a restricted portable key:
 			if name == "" {
 				name = "default"
 			}
-			cfg, _, store, _, err := app.LoadRuntime(mustHome())
+			cfg, paths, store, _, err := app.LoadRuntime(mustHome())
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -75,6 +80,9 @@ For public VPS / shared-agent use, create a restricted portable key:
 			}
 			if err := store.InsertClientKey(cmd.Context(), k); err != nil {
 				return Exit(ExitGeneral, err)
+			}
+			if unsafePortable && portable {
+				emitPortableKeyUnsafeOverrideAudit(paths, "key_create", id, portableMissingControls(k))
 			}
 			if flagJSON {
 				out := map[string]any{
@@ -118,7 +126,7 @@ For public VPS / shared-agent use, create a restricted portable key:
 	cmd.Flags().IntVar(&maxOutputTokens, "max-output-tokens", 0, "Cap max_tokens / max_output_tokens per request (0 = unlimited)")
 	cmd.Flags().Int64Var(&maxRequestBody, "max-request-body", 0, "Per-key request body size cap in bytes (0 = unlimited)")
 	cmd.Flags().BoolVar(&portable, "portable", false, "Mark as shared portable key (shows security warning)")
-	cmd.Flags().BoolVar(&unsafePortable, "unsafe-unrestricted-portable", false, "Override public-hosting portable-key safety (requires alias, body, and spend limits); use only with explicit intent")
+	cmd.Flags().BoolVar(&unsafePortable, "unsafe-unrestricted-portable", false, unsafeUnrestrictedPortableHelp)
 	cmd.Flags().StringVar(&expires, "expires", "", "Optional expiration (RFC3339 timestamp)")
 	return cmd
 }
@@ -187,18 +195,11 @@ func portableMissingControls(k storage.ClientKey) []string {
 }
 
 func checkPortableKeySafety(cfg *config.Config, k storage.ClientKey, unsafe bool) error {
-	if !k.Portable {
-		return nil
-	}
 	public := cfg != nil && cfg.PublicHosting.Enabled
-	missing := portableMissingControls(k)
-	if public && !unsafe {
-		if len(missing) > 0 {
-			return fmt.Errorf("refusing to create unrestricted portable key in public-hosting mode; missing %s (or pass --unsafe-unrestricted-portable to override)",
-				strings.Join(missing, ", "))
-		}
-	}
-	return nil
+	return ValidateEffectiveClientKeyPolicy(k, KeyPolicyValidationContext{
+		PublicHosting:          public,
+		UnsafePortableOverride: unsafe,
+	})
 }
 
 func keySetPolicy() *cobra.Command {
@@ -223,7 +224,7 @@ func keySetPolicy() *cobra.Command {
 		Short: "Update policy limits on an existing client key",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, _, store, _, err := app.LoadRuntime(mustHome())
+			cfg, paths, store, _, err := app.LoadRuntime(mustHome())
 			if err != nil {
 				return Exit(ExitInvalidConfig, err)
 			}
@@ -297,11 +298,6 @@ func keySetPolicy() *cobra.Command {
 			}
 			if setPortable {
 				k.Portable = portable
-				if portable {
-					if err := checkPortableKeySafety(cfg, k, unsafePortable); err != nil {
-						return Exit(ExitInvalidConfig, err)
-					}
-				}
 			}
 			if clearExpires {
 				k.ExpiresAt = nil
@@ -312,15 +308,47 @@ func keySetPolicy() *cobra.Command {
 				}
 				k.ExpiresAt = &t
 			}
+			// Validate effective key state after ALL changes, regardless of
+			// whether --set-portable was used. An existing portable key that
+			// was weakened (e.g. aliases cleared, body/cost budget removed)
+			// is caught here as well. The unsafe override applies only to the
+			// current operation.
+			public := cfg != nil && cfg.PublicHosting.Enabled
+			if err := ValidateEffectiveClientKeyPolicy(k, KeyPolicyValidationContext{
+				PublicHosting:          public,
+				UnsafePortableOverride: unsafePortable,
+			}); err != nil {
+				return Exit(ExitInvalidConfig, err)
+			}
 			if err := store.UpdateClientKeyPolicy(cmd.Context(), k); err != nil {
 				return Exit(ExitGeneral, err)
 			}
+			if unsafePortable && k.Portable {
+				emitPortableKeyUnsafeOverrideAudit(paths, "key_set_policy", k.ID, portableMissingControls(k))
+			}
 			if flagJSON {
-				return printJSON(keyPolicyMap(k))
+				m := keyPolicyMap(k)
+				if k.Portable {
+					m["warning"] = portableKeyWarning
+					if missing := portableMissingControls(k); len(missing) > 0 {
+						m["portable_missing_controls"] = missing
+						if public {
+							m["public_hosting_reject"] = true
+						}
+					}
+				}
+				return printJSON(m)
 			}
 			fmt.Printf("Updated policy for %s (%s)\n", k.ID, k.Name)
 			if k.Portable {
 				fmt.Println(portableKeyWarning)
+				if missing := portableMissingControls(k); len(missing) > 0 {
+					fmt.Printf("WARNING: portable key missing recommended controls: %s.\n", strings.Join(missing, ", "))
+					fmt.Println("These controls are required when public-hosting mode is active.")
+					if public {
+						fmt.Println("NOTE: this key would be REJECTED in the current public-hosting mode.")
+					}
+				}
 			}
 			return nil
 		},
@@ -336,10 +364,30 @@ func keySetPolicy() *cobra.Command {
 	cmd.Flags().Int64Var(&maxRequestBody, "max-request-body", 0, "Per-key request body size cap in bytes (0 clears)")
 	cmd.Flags().BoolVar(&portable, "portable", false, "Mark as portable/shared key")
 	cmd.Flags().BoolVar(&setPortable, "set-portable", false, "Apply --portable flag (required to change portable bit)")
-	cmd.Flags().BoolVar(&unsafePortable, "unsafe-unrestricted-portable", false, "Override public-hosting portable-key safety when enabling portable (requires alias, body, and spend limits)")
+	cmd.Flags().BoolVar(&unsafePortable, "unsafe-unrestricted-portable", false, unsafeUnrestrictedPortableHelp)
 	cmd.Flags().StringVar(&expires, "expires", "", "Expiration RFC3339")
 	cmd.Flags().BoolVar(&clearExpires, "clear-expires", false, "Remove expiration")
 	return cmd
+}
+
+// emitPortableKeyUnsafeOverrideAudit records a structured security_event when
+// --unsafe-unrestricted-portable is used. The event is written to the TermRouter
+// log (JSON) so operators can audit break-glass portable-key writes.
+func emitPortableKeyUnsafeOverrideAudit(paths config.Paths, operation, keyID string, missing []string) {
+	log, err := observability.New("warn", paths.LogsDir)
+	if err != nil {
+		// Best-effort fallback so the override is still visible on stderr.
+		fmt.Fprintf(os.Stderr, `{"msg":"security_event","event":"portable_key_unsafe_override","operation":%q,"key_id":%q,"missing_controls":%q}`+"\n",
+			operation, keyID, strings.Join(missing, ","))
+		return
+	}
+	defer log.Close()
+	log.Warn("security_event",
+		"event", "portable_key_unsafe_override",
+		"operation", operation,
+		"key_id", keyID,
+		"missing_controls", strings.Join(missing, ","),
+	)
 }
 
 func keyPolicyMap(k storage.ClientKey) map[string]any {
@@ -649,6 +697,9 @@ func newDoctorCmd() *cobra.Command {
 					if !cfg.Server.AuthRequired {
 						issues = append(issues, "auth_required is false — only use for local development")
 					}
+					if cfg.WebSearch.InsecureSkipVerify {
+						issues = append(issues, "INSECURE: web_search.insecure_skip_verify is true — TLS verification disabled for web search (evidence provenance will be marked)")
+					}
 					if cfg.PublicHosting.Enabled {
 						ok = append(ok, "public_hosting enabled (loopback + reverse proxy expected)")
 						if cfg.PublicHosting.ConsolePublic {
@@ -757,8 +808,7 @@ func newTestCmd() *cobra.Command {
 			if err != nil {
 				return Exit(ExitUnavailable, fmt.Errorf("request failed (is the server running?): %w", err))
 			}
-			defer resp.Body.Close()
-			b, _ := readAll(resp.Body)
+			b, _ := readResponseBody(resp)
 			if resp.StatusCode >= 400 {
 				return Exit(ExitUnavailable, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(b)))
 			}

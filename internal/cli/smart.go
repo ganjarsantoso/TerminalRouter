@@ -67,17 +67,7 @@ func smartReport() *cobra.Command {
 			defer store.Close()
 			dur := 7 * 24 * time.Hour
 			if last != "" {
-				d, err := time.ParseDuration(last)
-				if err != nil {
-					// support Nd form
-					if strings.HasSuffix(last, "d") {
-						var n int
-						if _, e := fmt.Sscanf(last, "%dd", &n); e == nil {
-							d = time.Duration(n) * 24 * time.Hour
-							err = nil
-						}
-					}
-				}
+				d, err := ParseLookback(last)
 				if err != nil {
 					return Exit(ExitInvalidConfig, fmt.Errorf("invalid --last: %w", err))
 				}

@@ -5,14 +5,15 @@
 #
 # Do NOT proxy /admin/v1/* or the Web Console (127.0.0.1:8788). Only the
 # inference paths below are reachable from the internet.
+#
+# To optionally expose health/readiness endpoints, uncomment:
+#   @health path /health /ready
+#   handle @health {
+#       reverse_proxy 127.0.0.1:8787
+#   }
 
 ai.example.com {
     encode zstd gzip
-
-    @health path /health /ready
-    handle @health {
-        reverse_proxy 127.0.0.1:8787
-    }
 
     @inference path /v1/models /v1/chat/completions /v1/messages
     handle @inference {

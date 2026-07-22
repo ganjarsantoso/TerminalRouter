@@ -25,11 +25,11 @@ type ModelIdentity struct {
 	Family           string `json:"family,omitempty"`
 	Version          string `json:"version,omitempty"`
 	ReleaseDate      string `json:"release_date,omitempty"`
-	Variant          string `json:"variant,omitempty"` // e.g. "base", "thinking", "instruct"
+	Variant          string `json:"variant,omitempty"`          // e.g. "base", "thinking", "instruct"
 	ReasoningEffort  string `json:"reasoning_effort,omitempty"` // e.g. "standard", "high"
-	PreviewStable    string `json:"preview_stable,omitempty"` // "preview" | "stable"
-	Quantization     string `json:"quantization,omitempty"` // e.g. "q4", "fp16", "full"
-	ContextMode      string `json:"context_mode,omitempty"` // e.g. "standard", "long"
+	PreviewStable    string `json:"preview_stable,omitempty"`   // "preview" | "stable"
+	Quantization     string `json:"quantization,omitempty"`     // e.g. "q4", "fp16", "full"
+	ContextMode      string `json:"context_mode,omitempty"`     // e.g. "standard", "long"
 	EndpointProvider string `json:"endpoint_provider,omitempty"`
 	Harness          string `json:"harness,omitempty"`
 }

@@ -14,7 +14,12 @@ type StoreAffinity struct {
 }
 
 func NewStoreAffinity(store *storage.Store) *StoreAffinity {
-	return &StoreAffinity{Store: store, Ctx: context.Background()}
+	// Callers of NewStoreAffinity should set Ctx to a request-scoped context
+	// or lifecycle context before using Get/Put/Delete. The zero default is a
+	// bounded fallback that prevents indefinite goroutine hangs.
+	bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	cancel() // cancelled immediately; caller must replace Ctx before use
+	return &StoreAffinity{Store: store, Ctx: bgCtx}
 }
 
 func (a *StoreAffinity) Get(sessionID string) (AffinityRecord, bool) {
@@ -23,7 +28,9 @@ func (a *StoreAffinity) Get(sessionID string) (AffinityRecord, bool) {
 	}
 	ctx := a.Ctx
 	if ctx == nil {
-		ctx = context.Background()
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ctx = bgCtx
 	}
 	r, err := a.Store.GetSessionAffinity(ctx, sessionID)
 	if err != nil || r == nil {
@@ -46,7 +53,9 @@ func (a *StoreAffinity) Put(rec AffinityRecord) error {
 	}
 	ctx := a.Ctx
 	if ctx == nil {
-		ctx = context.Background()
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ctx = bgCtx
 	}
 	return a.Store.UpsertSessionAffinity(ctx, storage.SessionAffinityRecord{
 		SessionID:  rec.SessionID,
@@ -66,7 +75,9 @@ func (a *StoreAffinity) Delete(sessionID string) error {
 	}
 	ctx := a.Ctx
 	if ctx == nil {
-		ctx = context.Background()
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		ctx = bgCtx
 	}
 	return a.Store.DeleteSessionAffinity(ctx, sessionID)
 }

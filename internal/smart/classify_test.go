@@ -42,10 +42,10 @@ func TestClassifyExplainDoesNotForceCoding(t *testing.T) {
 func TestClassifyToolsRequired(t *testing.T) {
 	req := &normalization.NormalizedRequest{
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "Call the weather tool for Paris"}},
 		}},
-		Tools: []normalization.Tool{{Name: "weather"}},
+		Tools:      []normalization.Tool{{Name: "weather"}},
 		ToolChoice: &normalization.ToolChoice{Type: "required"},
 	}
 	task := Classify(req)

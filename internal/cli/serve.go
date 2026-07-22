@@ -140,11 +140,15 @@ func newStatusCmd() *cobra.Command {
 			for a := range cfg.Aliases {
 				aliases = append(aliases, a)
 			}
+			sanitized := make(map[string]config.SanitizedProviderConfig, len(cfg.Providers))
+			for name, p := range cfg.Providers {
+				sanitized[name] = config.SanitizeProviderConfig(p)
+			}
 			out := map[string]any{
 				"address":   cfg.Addr(),
 				"running":   running,
 				"pid":       pid,
-				"providers": cfg.Providers,
+				"providers": sanitized,
 				"aliases":   aliases,
 				"health":    healthMap,
 				"home":      paths.Root,
@@ -161,12 +165,12 @@ func newStatusCmd() *cobra.Command {
 			fmt.Printf("Home:     %s\n", paths.Root)
 			fmt.Printf("Aliases:  %v\n", aliases)
 			fmt.Printf("Providers: %d configured\n", len(cfg.Providers))
-			for name, p := range cfg.Providers {
+			for name, sp := range sanitized {
 				en := "enabled"
-				if !p.IsEnabled() {
+				if sp.Enabled != nil && !*sp.Enabled {
 					en = "disabled"
 				}
-				fmt.Printf("  - %s (%s) %s\n", name, p.Type, en)
+				fmt.Printf("  - %s (%s) %s\n", name, sp.Type, en)
 			}
 			if len(health) > 0 {
 				fmt.Println("Health:")

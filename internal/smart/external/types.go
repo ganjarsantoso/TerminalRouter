@@ -13,6 +13,14 @@ type Searcher interface {
 	Search(ctx context.Context, query string) ([]SearchResult, error)
 }
 
+// TLSProvenance is an optional interface a Searcher may implement to report
+// whether TLS certificate verification was disabled during the search.
+// Evidence collected without TLS verification should be treated with lower
+// trust and marked in the provenance chain.
+type TLSProvenance interface {
+	TLSVerificationDisabled() bool
+}
+
 // SearchResult is a single search hit with extractable text.
 type SearchResult struct {
 	Title   string `json:"title"`
@@ -44,8 +52,8 @@ type Summary struct {
 	// (§18) can detect mismatches instead of always comparing against self.
 	Model        string              `json:"model,omitempty"`
 	Capabilities []SummaryCapability `json:"capabilities"`
-	Confidence   float64              `json:"confidence"`
-	Sources      []string             `json:"sources"`
+	Confidence   float64             `json:"confidence"`
+	Sources      []string            `json:"sources"`
 }
 
 // SummaryCapability is one model-judged capability estimate.
@@ -57,15 +65,14 @@ type SummaryCapability struct {
 	Note       string        `json:"note,omitempty"`
 }
 
-
 // SourceID identifies a curated, independent benchmark source.
 type SourceID string
 
 const (
-	SourceLiveBench       SourceID = "livebench"
-	SourceAAII            SourceID = "aa-intelligence-index"
-	SourceSWEBench        SourceID = "swebench"
-	SourceLMArena         SourceID = "lmarena"
+	SourceLiveBench SourceID = "livebench"
+	SourceAAII      SourceID = "aa-intelligence-index"
+	SourceSWEBench  SourceID = "swebench"
+	SourceLMArena   SourceID = "lmarena"
 )
 
 // TrustTier expresses how much we trust a source's normalization to the
@@ -90,14 +97,14 @@ const (
 
 // SourceMeta describes a curated benchmark source.
 type SourceMeta struct {
-	ID          SourceID  `json:"id"`
-	Name        string    `json:"name"`
-	URL         string    `json:"url"`
+	ID   SourceID `json:"id"`
+	Name string   `json:"name"`
+	URL  string   `json:"url"`
 	// Domains is the allowlist of hostnames from which automatic scoring is
 	// permitted. Subdomains of any listed domain are allowed. Fetched pages
 	// whose host is not in this allowlist may be displayed but contribute zero
 	// automatic score weight (see §15).
-	Domains     []string `json:"domains"`
+	Domains     []string  `json:"domains"`
 	TrustTier   TrustTier `json:"trust_tier"`
 	NativeScale ScaleKind `json:"native_scale"`
 	Description string    `json:"description"`
@@ -136,25 +143,25 @@ func (c CapabilityKey) String() string { return string(c) }
 
 // NormalizedScore is a source value mapped to the universal 0-10 scale.
 type NormalizedScore struct {
-	Source     SourceID      `json:"source"`
-	Raw        float64       `json:"raw"`
-	RawScale   ScaleKind     `json:"raw_scale"`
-	Normalized float64       `json:"normalized"`
-	Tier       TrustTier     `json:"tier"`
+	Source     SourceID  `json:"source"`
+	Raw        float64   `json:"raw"`
+	RawScale   ScaleKind `json:"raw_scale"`
+	Normalized float64   `json:"normalized"`
+	Tier       TrustTier `json:"tier"`
 }
 
 // EvidenceRecord is a single observation of a model on a source, optionally
 // mapped to one or more universal capability dimensions.
 type EvidenceRecord struct {
-	Source        SourceID       `json:"source"`
-	ModelIdentity string         `json:"model_identity"` // canonical identity id
-	Benchmark     string         `json:"benchmark"`      // e.g. "livebench/overall"
-	Value         float64        `json:"value"`          // native scale
-	Scale         ScaleKind      `json:"scale"`
-	Capability    CapabilityKey  `json:"capability"` // primary capability this maps to
-	ReportedAt    time.Time      `json:"reported_at"`
-	URL           string         `json:"url,omitempty"`
-	Notes         string         `json:"notes,omitempty"`
+	Source        SourceID      `json:"source"`
+	ModelIdentity string        `json:"model_identity"` // canonical identity id
+	Benchmark     string        `json:"benchmark"`      // e.g. "livebench/overall"
+	Value         float64       `json:"value"`          // native scale
+	Scale         ScaleKind     `json:"scale"`
+	Capability    CapabilityKey `json:"capability"` // primary capability this maps to
+	ReportedAt    time.Time     `json:"reported_at"`
+	URL           string        `json:"url,omitempty"`
+	Notes         string        `json:"notes,omitempty"`
 
 	// Published is the model identity as claimed by the source (e.g. the model
 	// name printed on a leaderboard), used for variant matching (§18). When the
@@ -166,21 +173,25 @@ type EvidenceRecord struct {
 	// result that appears on multiple sites (leaderboard, model card, mirror,
 	// blog, snippet). Populated when available; the canonical experiment key
 	// tolerates missing fields.
-	Harness          string    `json:"harness,omitempty"`
-	ReasoningSetting string    `json:"reasoning_setting,omitempty"`
-	RawScore         float64   `json:"raw_score,omitempty"`
-	EvaluationDate   string    `json:"evaluation_date,omitempty"`
-	RunID            string    `json:"run_id,omitempty"`
-	OriginalPublisher string   `json:"original_publisher,omitempty"`
+	Harness           string  `json:"harness,omitempty"`
+	ReasoningSetting  string  `json:"reasoning_setting,omitempty"`
+	RawScore          float64 `json:"raw_score,omitempty"`
+	EvaluationDate    string  `json:"evaluation_date,omitempty"`
+	RunID             string  `json:"run_id,omitempty"`
+	OriginalPublisher string  `json:"original_publisher,omitempty"`
 	// ProvenanceURLs collects mirror/duplicate URLs folded into this canonical
 	// record. Mirrors are provenance, not independent evidence.
 	ProvenanceURLs []string `json:"provenance_urls,omitempty"`
+	// TLSDisabled indicates that TLS certificate verification was disabled when
+	// this evidence was retrieved. Evidence collected without TLS verification
+	// should be treated with lower trust.
+	TLSDisabled bool `json:"tls_disabled,omitempty"`
 }
 
 // EvidenceRecordWithNorm carries an evidence record plus its normalized form.
 type EvidenceRecordWithNorm struct {
-	Evidence  EvidenceRecord `json:"evidence"`
-	Normal    NormalizedScore `json:"normalized"`
+	Evidence EvidenceRecord  `json:"evidence"`
+	Normal   NormalizedScore `json:"normalized"`
 	// Match is the outcome of matching the published identity against the
 	// configured identity (§18).
 	Match IdentityMatch `json:"match"`
@@ -191,14 +202,14 @@ type EvidenceRecordWithNorm struct {
 
 // ConsensusCapability is the aggregated estimate for one capability dimension.
 type ConsensusCapability struct {
-	Capability   CapabilityKey          `json:"capability"`
-	Estimate     float64                `json:"estimate"` // consensus 0-10
-	Confidence   float64                `json:"confidence"` // 0-1
-	LowBand      float64                `json:"low_band"`
-	HighBand     float64                `json:"high_band"`
-	SourceCount  int                    `json:"source_count"`
-	Contributing []EvidenceRecordWithNorm `json:"contributing"`
-	PrimarySource SourceID              `json:"primary_source,omitempty"`
+	Capability    CapabilityKey            `json:"capability"`
+	Estimate      float64                  `json:"estimate"`   // consensus 0-10
+	Confidence    float64                  `json:"confidence"` // 0-1
+	LowBand       float64                  `json:"low_band"`
+	HighBand      float64                  `json:"high_band"`
+	SourceCount   int                      `json:"source_count"`
+	Contributing  []EvidenceRecordWithNorm `json:"contributing"`
+	PrimarySource SourceID                 `json:"primary_source,omitempty"`
 	// MandatoryReview is true when any contributing record matched at the
 	// strong-probable level and therefore requires human sign-off before the
 	// proposal is applied (§18).
@@ -211,14 +222,14 @@ type ConsensusCapability struct {
 
 // ConsensusProfile is the full external-consensus profile for a model.
 type ConsensusProfile struct {
-	ModelIdentity string                        `json:"model_identity"`
-	ProviderID    string                        `json:"provider_id,omitempty"`
-	ModelID       string                        `json:"model_id,omitempty"`
+	ModelIdentity string                                `json:"model_identity"`
+	ProviderID    string                                `json:"provider_id,omitempty"`
+	ModelID       string                                `json:"model_id,omitempty"`
 	Capabilities  map[CapabilityKey]ConsensusCapability `json:"capabilities"`
-	Overall       float64                       `json:"overall"`
-	Sources       []SourceID                    `json:"sources"`
-	Confidence    float64                       `json:"confidence"`
-	GeneratedAt   time.Time                     `json:"generated_at"`
+	Overall       float64                               `json:"overall"`
+	Sources       []SourceID                            `json:"sources"`
+	Confidence    float64                               `json:"confidence"`
+	GeneratedAt   time.Time                             `json:"generated_at"`
 	// MandatoryReview is true when any contributing evidence matched at the
 	// strong-probable level (§18), requiring human sign-off before apply.
 	MandatoryReview bool `json:"mandatory_review"`
@@ -226,25 +237,25 @@ type ConsensusProfile struct {
 
 // ProposalField is a single capability change proposed for a profile.
 type ProposalField struct {
-	Capability CapabilityKey `json:"capability"`
-	Current    *float64      `json:"current,omitempty"`
-	Proposed   float64       `json:"proposed"`
+	Capability CapabilityKey            `json:"capability"`
+	Current    *float64                 `json:"current,omitempty"`
+	Proposed   float64                  `json:"proposed"`
 	Evidence   []EvidenceRecordWithNorm `json:"evidence"`
 }
 
 // Proposal is a reviewable set of external-capability updates for a model profile.
 type Proposal struct {
-	ID            string          `json:"id"`
-	ProviderID    string          `json:"provider_id"`
-	ModelID       string          `json:"model_id"`
-	ModelIdentity string          `json:"model_identity"`
-	Fields        []ProposalField `json:"fields"`
-	Overall       float64         `json:"overall"`
-	Confidence    float64         `json:"confidence"`
-	Sources       []SourceID      `json:"sources"`
-	CreatedAt     time.Time       `json:"created_at"`
-	Status        string          `json:"status"` // pending | applied | dismissed
-	RegistryVersion string        `json:"registry_version"`
+	ID              string          `json:"id"`
+	ProviderID      string          `json:"provider_id"`
+	ModelID         string          `json:"model_id"`
+	ModelIdentity   string          `json:"model_identity"`
+	Fields          []ProposalField `json:"fields"`
+	Overall         float64         `json:"overall"`
+	Confidence      float64         `json:"confidence"`
+	Sources         []SourceID      `json:"sources"`
+	CreatedAt       time.Time       `json:"created_at"`
+	Status          string          `json:"status"` // pending | applied | dismissed
+	RegistryVersion string          `json:"registry_version"`
 	// MandatoryReview is true when any field requires human sign-off (§18):
 	// the proposal must not be auto-applied.
 	MandatoryReview bool `json:"mandatory_review"`
@@ -252,12 +263,12 @@ type Proposal struct {
 
 // RegistryInfo describes the bundled curated registry state.
 type RegistryInfo struct {
-	Version      string    `json:"version"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	SourceCount  int       `json:"source_count"`
-	ModelCount   int       `json:"model_count"`
-	EvidenceCount int      `json:"evidence_count"`
-	Sources      []SourceMeta `json:"sources"`
+	Version       string       `json:"version"`
+	UpdatedAt     time.Time    `json:"updated_at"`
+	SourceCount   int          `json:"source_count"`
+	ModelCount    int          `json:"model_count"`
+	EvidenceCount int          `json:"evidence_count"`
+	Sources       []SourceMeta `json:"sources"`
 }
 
 // ImportRecord is a persisted import event.

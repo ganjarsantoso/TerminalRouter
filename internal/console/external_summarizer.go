@@ -140,7 +140,7 @@ func parseSummary(text string) (external.Summary, error) {
 		return external.Summary{}, fmt.Errorf("summarizer returned no JSON")
 	}
 	var raw struct {
-		Model string `json:"model"`
+		Model        string `json:"model"`
 		Capabilities []struct {
 			Capability string  `json:"capability"`
 			Score      float64 `json:"score"`

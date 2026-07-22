@@ -9,27 +9,27 @@ import (
 
 // AssessmentRecordData is the raw persisted assessment data.
 type AssessmentRecordData struct {
-	AssessmentID          string           `json:"assessment_id"`
-	ProviderID            string           `json:"provider_id"`
-	ModelID               string           `json:"model_id"`
-	ConnectionFingerprint string           `json:"connection_fingerprint,omitempty"`
-	Status                string           `json:"status"`
-	Depth                 string           `json:"depth"`
-	BenchmarkVersion      string           `json:"benchmark_version"`
-	ScoringVersion        string           `json:"scoring_version"`
-	CategoriesJSON        string           `json:"categories_json"`
-	StartedAt             *time.Time       `json:"started_at,omitempty"`
-	CompletedAt           *time.Time       `json:"completed_at,omitempty"`
-	EstimatedTokens       int              `json:"estimated_tokens"`
-	InputTokens           int              `json:"input_tokens"`
-	OutputTokens          int              `json:"output_tokens"`
-	EstimatedCost         float64          `json:"estimated_cost"`
-	ActualCost            float64          `json:"actual_cost"`
-	Confidence            float64          `json:"confidence"`
-	ProposedProfileJSON   string           `json:"proposed_profile_json,omitempty"`
-	AppliedAt             *time.Time       `json:"applied_at,omitempty"`
-	AppliedFields         []string         `json:"applied_fields,omitempty"`
-	Error                 string           `json:"error,omitempty"`
+	AssessmentID          string     `json:"assessment_id"`
+	ProviderID            string     `json:"provider_id"`
+	ModelID               string     `json:"model_id"`
+	ConnectionFingerprint string     `json:"connection_fingerprint,omitempty"`
+	Status                string     `json:"status"`
+	Depth                 string     `json:"depth"`
+	BenchmarkVersion      string     `json:"benchmark_version"`
+	ScoringVersion        string     `json:"scoring_version"`
+	CategoriesJSON        string     `json:"categories_json"`
+	StartedAt             *time.Time `json:"started_at,omitempty"`
+	CompletedAt           *time.Time `json:"completed_at,omitempty"`
+	EstimatedTokens       int        `json:"estimated_tokens"`
+	InputTokens           int        `json:"input_tokens"`
+	OutputTokens          int        `json:"output_tokens"`
+	EstimatedCost         float64    `json:"estimated_cost"`
+	ActualCost            float64    `json:"actual_cost"`
+	Confidence            float64    `json:"confidence"`
+	ProposedProfileJSON   string     `json:"proposed_profile_json,omitempty"`
+	AppliedAt             *time.Time `json:"applied_at,omitempty"`
+	AppliedFields         []string   `json:"applied_fields,omitempty"`
+	Error                 string     `json:"error,omitempty"`
 }
 
 // AssessmentSummaryData is a lightweight row for listing.

@@ -127,7 +127,7 @@ func TestEconomyCostCeiling(t *testing.T) {
 	req := &normalization.NormalizedRequest{
 		ID: "req2",
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "hello"}},
 		}},
 	}
@@ -154,7 +154,7 @@ func TestToolsHardConstraint(t *testing.T) {
 	req := &normalization.NormalizedRequest{
 		ID: "req3",
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "Use tools to fetch weather"}},
 		}},
 		Tools:      []normalization.Tool{{Name: "weather"}},
@@ -181,7 +181,7 @@ func TestPrivatePolicy(t *testing.T) {
 	req := &normalization.NormalizedRequest{
 		ID: "req4",
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "rewrite this sentence politely"}},
 		}},
 	}
@@ -201,7 +201,7 @@ func TestShadowDoesNotError(t *testing.T) {
 	req := &normalization.NormalizedRequest{
 		ID: "req5",
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "sum 2+2"}},
 		}},
 	}
@@ -222,7 +222,7 @@ func TestSessionAffinity(t *testing.T) {
 	req := &normalization.NormalizedRequest{
 		ID: "req6",
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "```go\nfunc main(){}\n``` debug this panic"}},
 		}},
 	}
@@ -233,7 +233,7 @@ func TestSessionAffinity(t *testing.T) {
 	req2 := &normalization.NormalizedRequest{
 		ID: "req7",
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "now check this function"}},
 		}},
 	}
@@ -254,7 +254,7 @@ func TestDeterministicSelection(t *testing.T) {
 	req := &normalization.NormalizedRequest{
 		ID: "req8",
 		Messages: []normalization.Message{{
-			Role: normalization.RoleUser,
+			Role:    normalization.RoleUser,
 			Content: []normalization.ContentBlock{{Type: normalization.ContentText, Text: "Write a Python fibonacci function"}},
 		}},
 	}

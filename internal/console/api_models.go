@@ -46,11 +46,11 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		for _, m := range models {
 			prof, _ := ps.Resolve(p.Type, m.ID, "")
 			out = append(out, map[string]any{
-				"provider":   name,
-				"model":      m.ID,
-				"id":         smart.ProfileKey(p.Type, m.ID),
-				"state":      "discovered",
-				"profiled":   prof.Source != smart.SourceUnknown,
+				"provider":     name,
+				"model":        m.ID,
+				"id":           smart.ProfileKey(p.Type, m.ID),
+				"state":        "discovered",
+				"profiled":     prof.Source != smart.SourceUnknown,
 				"capabilities": prof.Capabilities,
 			})
 		}
@@ -103,11 +103,11 @@ func (s *Server) handleListProfiles(w http.ResponseWriter, r *http.Request) {
 
 func profileRow(id string, p smart.ModelProfile, source string) map[string]any {
 	return map[string]any{
-		"id":          id,
-		"source":      source,
-		"version":     p.Version,
+		"id":           id,
+		"source":       source,
+		"version":      p.Version,
 		"capabilities": p.Capabilities,
-		"properties":  p.Properties,
+		"properties":   p.Properties,
 	}
 }
 
@@ -122,20 +122,20 @@ func (s *Server) handleGetProfile(w http.ResponseWriter, r *http.Request) {
 	provider, model := splitProfileID(id)
 	res := ps.ResolveDetailed(provider, model, id)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":          id,
-		"source":      res.Effective.Source,
-		"found":       res.Found,
-		"capabilities": res.Effective.Capabilities,
+		"id":                      id,
+		"source":                  res.Effective.Source,
+		"found":                   res.Found,
+		"capabilities":            res.Effective.Capabilities,
 		"capabilities_provenance": res.Capabilities,
-		"properties":  res.Effective.Properties,
-		"property_sources": res.PropertySources,
+		"properties":              res.Effective.Properties,
+		"property_sources":        res.PropertySources,
 	})
 }
 
 func (s *Server) handlePutProfile(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		Capabilities map[string]float64          `json:"capabilities"`
+		Capabilities map[string]float64           `json:"capabilities"`
 		Properties   config.ModelPropertiesConfig `json:"properties"`
 	}
 	if err := decodeJSON(r, &body); err != nil {

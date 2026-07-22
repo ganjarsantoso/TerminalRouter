@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/termrouter/termrouter/internal/app"
@@ -106,7 +107,9 @@ func modelAssessRun() *cobra.Command {
 				if err != nil || secret == "" {
 					return false, false, false
 				}
-				models, err := adapter.ListModels(context.Background(), p, secret)
+				listCtx, listCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer listCancel()
+				models, err := adapter.ListModels(listCtx, p, secret)
 				if err != nil {
 					return false, false, false
 				}
@@ -178,7 +181,8 @@ func modelAssessShow() *cobra.Command {
 
 func modelAssessApply() *cobra.Command {
 	var acceptedFields string
-	var preserveOverrides bool
+	// User overrides are always preserved under the layered model; an assessment
+	// baseline is written to AssessmentBaseline and never overwrites UserOverrides.
 	cmd := &cobra.Command{
 		Use:   "apply [assessment-id]",
 		Short: "Apply an assessment proposal to the model profile",
@@ -240,7 +244,6 @@ func modelAssessApply() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&acceptedFields, "fields", "", "Comma-separated fields to accept (empty = all)")
-	cmd.Flags().BoolVar(&preserveOverrides, "preserve-overrides", true, "Preserve existing user overrides")
 	return cmd
 }
 
@@ -410,10 +413,10 @@ func modelProfileShow() *cobra.Command {
 func modelProfileSet() *cobra.Command {
 	var (
 		general, coding, reasoning, analysis, writing, toolUse float64
-		costTier, latencyTier                                   int
-		privacy                                                 string
-		vision, tools                                           string
-		contextWindow                                           int
+		costTier, latencyTier                                  int
+		privacy                                                string
+		vision, tools                                          string
+		contextWindow                                          int
 	)
 	cmd := &cobra.Command{
 		Use:   "set [provider/model]",

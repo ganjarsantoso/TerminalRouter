@@ -7,14 +7,14 @@ import (
 
 // Paths holds the TermRouter filesystem layout under the config root.
 type Paths struct {
-	Root      string
-	Config    string
-	Database  string
-	Vault     string
-	LogsDir   string
-	RunDir    string
-	PIDFile   string
-	Socket    string
+	Root     string
+	Config   string
+	Database string
+	Vault    string
+	LogsDir  string
+	RunDir   string
+	PIDFile  string
+	Socket   string
 }
 
 // DefaultRoot returns the default configuration directory (~/.termrouter).

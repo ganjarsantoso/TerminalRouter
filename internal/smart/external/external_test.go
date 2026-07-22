@@ -99,7 +99,7 @@ func TestExtractEvidence(t *testing.T) {
 		{Title: "x", Snippet: "GPT-4o LiveBench overall 72.1% and LiveBench reasoning 68.4%", URL: "u"},
 		{Title: "y", Snippet: "SWE-bench Verified 51.0% for gpt-4o", URL: "u2"},
 	}
-	recs := extractEvidence(id, res)
+	recs := extractEvidence(id, res, false)
 	if len(recs) < 2 {
 		t.Fatalf("expected >=2 evidence records, got %d", len(recs))
 	}

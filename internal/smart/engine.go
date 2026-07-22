@@ -10,18 +10,18 @@ import (
 
 // RouteConfig is the smart-route configuration used at decision time.
 type RouteConfig struct {
-	RouteID              string
-	Mode                 string // shadow | live | off
-	Policy               string
-	Candidates           []Candidate
-	ConfidenceThreshold  float64 // high confidence threshold (default 0.80)
-	LowConfidenceFloor   float64 // below this → default (default 0.50)
-	MinimumTaskMatch     float64
-	DefaultProvider      string
-	DefaultModel         string
-	StrictProfiles       bool
-	SessionAffinity      bool
-	SessionTTL           time.Duration
+	RouteID             string
+	Mode                string // shadow | live | off
+	Policy              string
+	Candidates          []Candidate
+	ConfidenceThreshold float64 // high confidence threshold (default 0.80)
+	LowConfidenceFloor  float64 // below this → default (default 0.50)
+	MinimumTaskMatch    float64
+	DefaultProvider     string
+	DefaultModel        string
+	StrictProfiles      bool
+	SessionAffinity     bool
+	SessionTTL          time.Duration
 }
 
 // Engine performs smart model selection.

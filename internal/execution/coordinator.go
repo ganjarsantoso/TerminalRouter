@@ -13,6 +13,7 @@ import (
 	"github.com/termrouter/termrouter/internal/credentials"
 	"github.com/termrouter/termrouter/internal/normalization"
 	"github.com/termrouter/termrouter/internal/observability"
+	"github.com/termrouter/termrouter/internal/optimization"
 	"github.com/termrouter/termrouter/internal/provider"
 	"github.com/termrouter/termrouter/internal/router"
 	"github.com/termrouter/termrouter/internal/storage"
@@ -43,6 +44,10 @@ type StreamResult struct {
 	FallbackReason string
 	// OnCommit is called when first client-visible content is seen (optional hook).
 	PublicModel string
+	// OptFinalizer ensures the optimization record is finalized exactly once
+	// when the stream closes. Callers must invoke OptFinalizer.Finalize() after
+	// consuming the stream (on Close, EOF, error, or context cancellation).
+	OptFinalizer *optimization.StreamFinalizer
 }
 
 // Coordinator runs retry/fallback/circuit logic.
@@ -55,6 +60,9 @@ type Coordinator struct {
 	// pricing is not configured (in which case cost budgets cannot be enforced
 	// and unpriced routes are rejected for portable/public keys).
 	Cfg *config.Config
+	// Opt is the optional token-optimization engine. When non-nil, requests are
+	// optimized (deterministically, fail-closed) before provider execution.
+	Opt *optimization.Engine
 
 	mu       sync.Mutex
 	reserved map[string]*spendReservation
@@ -64,7 +72,7 @@ type Coordinator struct {
 // into the execution boundary so the coordinator can perform authoritative
 // spend admission (per-route pricing + worst-case reservation + daily budget).
 type PolicyContext struct {
-	ClientKey    *storage.ClientKey
+	ClientKey     *storage.ClientKey
 	PublicHosting bool
 }
 
@@ -95,6 +103,10 @@ func (c *Coordinator) Execute(ctx context.Context, req *normalization.Normalized
 	}
 	defer c.releaseSpend(resv)
 
+	// Optimize the request deterministically (fail-closed) before execution.
+	optReq, optRec := c.optimize(ctx, req, plan, policy)
+	req = optReq
+
 	var lastErr error
 	var fallbackReason string
 	max := defaultMaxAttempts
@@ -121,6 +133,7 @@ func (c *Coordinator) Execute(ctx context.Context, req *normalization.Normalized
 			lat := time.Since(start)
 			if err == nil {
 				c.recordSuccess(ctx, att.ProviderID, lat)
+				c.finalizeOptimization(ctx, optRec, resp.Usage.InputTokens, resp.Usage.OutputTokens, -1)
 				return &Result{
 					Response:       resp,
 					ProviderID:     att.ProviderID,
@@ -167,8 +180,8 @@ func (c *Coordinator) Execute(ctx context.Context, req *normalization.Normalized
 	}
 	if lastErr == nil {
 		return nil, &normalization.Error{
-			Code: normalization.ErrProviderUnavailable,
-			Message: "no healthy eligible target",
+			Code:       normalization.ErrProviderUnavailable,
+			Message:    "no healthy eligible target",
 			HTTPStatus: 503,
 		}
 	}
@@ -176,10 +189,10 @@ func (c *Coordinator) Execute(ctx context.Context, req *normalization.Normalized
 		return nil, ne
 	}
 	return nil, &normalization.Error{
-		Code: normalization.ErrProviderUnavailable,
-		Message: lastErr.Error(),
+		Code:       normalization.ErrProviderUnavailable,
+		Message:    lastErr.Error(),
 		HTTPStatus: 503,
-		Retryable: true,
+		Retryable:  true,
 	}
 }
 
@@ -192,6 +205,10 @@ func (c *Coordinator) ExecuteStream(ctx context.Context, req *normalization.Norm
 		return nil, aerr
 	}
 	defer c.releaseSpend(resv)
+
+	// Optimize the request deterministically (fail-closed) before execution.
+	optReq, optRec := c.optimize(ctx, req, plan, policy)
+	req = optReq
 
 	var lastErr error
 	var fallbackReason string
@@ -241,6 +258,10 @@ func (c *Coordinator) ExecuteStream(ctx context.Context, req *normalization.Norm
 		}
 
 		c.recordSuccess(ctx, att.ProviderID, 0)
+		var sf *optimization.StreamFinalizer
+		if c.Opt != nil && optRec != nil {
+			sf = optimization.NewStreamFinalizer(c.Opt, optRec)
+		}
 		return &StreamResult{
 			Stream:         &replayStream{buf: buffered, inner: stream},
 			ProviderID:     att.ProviderID,
@@ -248,13 +269,14 @@ func (c *Coordinator) ExecuteStream(ctx context.Context, req *normalization.Norm
 			Attempt:        attemptNum,
 			FallbackReason: fallbackReason,
 			PublicModel:    plan.PublicModel,
+			OptFinalizer:   sf,
 		}, nil
 	}
 
 	if lastErr == nil {
 		return nil, &normalization.Error{
-			Code: normalization.ErrProviderUnavailable,
-			Message: "no healthy eligible target",
+			Code:       normalization.ErrProviderUnavailable,
+			Message:    "no healthy eligible target",
 			HTTPStatus: 503,
 		}
 	}
@@ -448,20 +470,70 @@ func clientKeyID(k *storage.ClientKey) string {
 	return k.ID
 }
 
+// optimize runs the token-optimization engine for a request, returning the
+// (possibly transformed) request and the optimization record. On any error or
+// when the engine is disabled it returns the original request and a nil record.
+func (c *Coordinator) optimize(ctx context.Context, req *normalization.NormalizedRequest, plan *router.Plan, policy PolicyContext) (*normalization.NormalizedRequest, *optimization.Record) {
+	if c.Opt == nil || !c.Opt.Enabled() {
+		return req, nil
+	}
+	prov, model := "", ""
+	if len(plan.Attempts) > 0 {
+		prov, model = plan.Attempts[0].ProviderID, plan.Attempts[0].Model
+	}
+	var pricing *config.Price
+	if c.Cfg != nil {
+		if p, ok := c.Cfg.LookupPrice(prov, model); ok {
+			pricing = &p
+		}
+	}
+	var keyMax string
+	if policy.ClientKey != nil && policy.ClientKey.OptimizationMode != nil {
+		keyMax = *policy.ClientKey.OptimizationMode
+	}
+	oc := optimization.OptimizationContext{
+		RequestID:     req.ID,
+		ClientKeyID:   clientKeyID(policy.ClientKey),
+		RouteName:     plan.RouteName,
+		ProviderID:    prov,
+		ModelID:       model,
+		PublicHosting: policy.PublicHosting,
+		Stream:        false,
+		KeyMaxMode:    keyMax,
+		Pricing:       pricing,
+	}
+	optReq, _, rec, err := c.Opt.Process(ctx, req, oc)
+	if err != nil {
+		if c.Log != nil {
+			c.Log.Warn("optimization skipped", "request_id", observability.RequestIDFrom(ctx), "error", observability.Redact(err.Error()))
+		}
+		return req, nil
+	}
+	return optReq, rec
+}
+
+// finalizeOptimization fills provider-reported actuals and persists the record.
+func (c *Coordinator) finalizeOptimization(ctx context.Context, rec *optimization.Record, inputTokens, outputTokens, cachedTokens int) {
+	if c.Opt == nil || rec == nil {
+		return
+	}
+	c.Opt.FinalizeAndPersist(ctx, rec, inputTokens, outputTokens, cachedTokens)
+}
+
 func (c *Coordinator) tryOnce(ctx context.Context, req *normalization.NormalizedRequest, att router.Attempt) (*normalization.NormalizedResponse, error) {
 	adapter, ok := c.Registry.Get(att.Config.Type)
 	if !ok {
 		return nil, &normalization.Error{
-			Code: normalization.ErrInternal,
-			Message: fmt.Sprintf("no adapter for provider type %q", att.Config.Type),
+			Code:       normalization.ErrInternal,
+			Message:    fmt.Sprintf("no adapter for provider type %q", att.Config.Type),
 			HTTPStatus: 500,
 		}
 	}
 	cred, err := c.Creds.Resolve(att.Config.CredentialRef)
 	if err != nil {
 		return nil, &normalization.Error{
-			Code: normalization.ErrProviderAuth,
-			Message: fmt.Sprintf("credential resolve failed for %s: %v", att.ProviderID, err),
+			Code:       normalization.ErrProviderAuth,
+			Message:    fmt.Sprintf("credential resolve failed for %s: %v", att.ProviderID, err),
 			HTTPStatus: 502,
 		}
 	}
@@ -484,16 +556,16 @@ func (c *Coordinator) openStream(ctx context.Context, req *normalization.Normali
 	adapter, ok := c.Registry.Get(att.Config.Type)
 	if !ok {
 		return nil, &normalization.Error{
-			Code: normalization.ErrInternal,
-			Message: fmt.Sprintf("no adapter for provider type %q", att.Config.Type),
+			Code:       normalization.ErrInternal,
+			Message:    fmt.Sprintf("no adapter for provider type %q", att.Config.Type),
 			HTTPStatus: 500,
 		}
 	}
 	cred, err := c.Creds.Resolve(att.Config.CredentialRef)
 	if err != nil {
 		return nil, &normalization.Error{
-			Code: normalization.ErrProviderAuth,
-			Message: fmt.Sprintf("credential resolve failed for %s: %v", att.ProviderID, err),
+			Code:       normalization.ErrProviderAuth,
+			Message:    fmt.Sprintf("credential resolve failed for %s: %v", att.ProviderID, err),
 			HTTPStatus: 502,
 		}
 	}

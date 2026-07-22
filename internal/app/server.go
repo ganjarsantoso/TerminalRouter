@@ -18,6 +18,7 @@ import (
 	"github.com/termrouter/termrouter/internal/credentials"
 	"github.com/termrouter/termrouter/internal/execution"
 	"github.com/termrouter/termrouter/internal/observability"
+	"github.com/termrouter/termrouter/internal/optimization"
 	"github.com/termrouter/termrouter/internal/provider"
 	panthropic "github.com/termrouter/termrouter/internal/provider/anthropic"
 	"github.com/termrouter/termrouter/internal/provider/compatible"
@@ -73,6 +74,9 @@ func (s *Server) rebuildHandler() {
 	resolver := router.NewResolver(s.Cfg)
 	coord := execution.New(s.Registry, s.Creds, s.Store, s.Log)
 	coord.Cfg = s.Cfg
+	if s.Cfg.Optimization.Enabled {
+		coord.Opt = optimization.NewEngine(s.Cfg.Optimization, s.Store, s.Log)
+	}
 	timeout := s.Cfg.Server.RequestTimeout.Duration()
 	if timeout == 0 {
 		timeout = 180 * time.Second
@@ -246,13 +250,13 @@ func (s *Server) writePID() error {
 
 // Status returns runtime status for the CLI.
 type Status struct {
-	Address       string            `json:"address"`
-	Uptime        string            `json:"uptime"`
-	ActiveStreams int64             `json:"active_requests"`
-	PID           int               `json:"pid,omitempty"`
-	Running       bool              `json:"running"`
-	Providers     map[string]string `json:"providers"`
-	Aliases       []string          `json:"aliases"`
+	Address       string                                    `json:"address"`
+	Uptime        string                                    `json:"uptime"`
+	ActiveStreams int64                                     `json:"active_requests"`
+	PID           int                                       `json:"pid,omitempty"`
+	Running       bool                                      `json:"running"`
+	Providers     map[string]config.SanitizedProviderConfig `json:"providers"`
+	Aliases       []string                                  `json:"aliases"`
 }
 
 // RuntimeStatus builds a status snapshot (from live server or pid file).
@@ -261,7 +265,7 @@ func (s *Server) RuntimeStatus() Status {
 		Address:       s.Cfg.Addr(),
 		ActiveStreams: s.active.Load(),
 		Running:       s.http != nil && !s.started.IsZero(),
-		Providers:     map[string]string{},
+		Providers:     map[string]config.SanitizedProviderConfig{},
 		Aliases:       router.NewResolver(s.Cfg).ListPublicModels(),
 	}
 	if !s.started.IsZero() {
@@ -269,11 +273,7 @@ func (s *Server) RuntimeStatus() Status {
 		st.PID = os.Getpid()
 	}
 	for name, p := range s.Cfg.Providers {
-		state := "enabled"
-		if !p.IsEnabled() {
-			state = "disabled"
-		}
-		st.Providers[name] = state
+		st.Providers[name] = config.SanitizeProviderConfig(p)
 	}
 	return st
 }

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/termrouter/termrouter/internal/optimization"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -121,6 +123,45 @@ func (s *Store) applyMigrations(fromVersion int) error {
 			}
 		}
 	}
+	if fromVersion < 10 {
+		for _, stmt := range migrationSQLv10 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+					return fmt.Errorf("migrate to v10: %w", err)
+				}
+			}
+		}
+	}
+	if fromVersion < 11 {
+		for _, stmt := range migrationSQLv11 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				low := strings.ToLower(err.Error())
+				if !strings.Contains(low, "duplicate column") && !strings.Contains(low, "already exists") {
+					return fmt.Errorf("migrate to v11: %w", err)
+				}
+			}
+		}
+	}
+	if fromVersion < 12 {
+		for _, stmt := range migrationSQLv12 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				low := strings.ToLower(err.Error())
+				if !strings.Contains(low, "duplicate column") && !strings.Contains(low, "already exists") {
+					return fmt.Errorf("migrate to v12: %w", err)
+				}
+			}
+		}
+	}
+	if fromVersion < 13 {
+		for _, stmt := range migrationSQLv13 {
+			if _, err := s.db.Exec(stmt); err != nil {
+				low := strings.ToLower(err.Error())
+				if !strings.Contains(low, "duplicate column") && !strings.Contains(low, "already exists") {
+					return fmt.Errorf("migrate to v13: %w", err)
+				}
+			}
+		}
+	}
 	return nil
 }
 
@@ -144,11 +185,12 @@ type ClientKey struct {
 	DailyOutputTokens     *int64
 	DailyEstimatedCostUSD *float64
 	MaxOutputTokens       *int
-	MaxRequestBody        *int64 // per-key request body size cap in bytes (nil = unlimited)
-	AllowDirectModels     bool   // whether the key may use provider/model direct syntax at all
+	MaxRequestBody        *int64   // per-key request body size cap in bytes (nil = unlimited)
+	AllowDirectModels     bool     // whether the key may use provider/model direct syntax at all
 	AllowedDirectModels   []string // exact direct models allowed; empty with AllowDirectModels=true means unrestricted
 	ExpiresAt             *time.Time
 	Portable              bool
+	OptimizationMode      *string // per-key maximum optimization mode; nil = server default
 	CreatedAt             time.Time
 	RotatedAt             *time.Time
 	DisabledAt            *time.Time
@@ -157,7 +199,7 @@ type ClientKey struct {
 const clientKeySelectCols = `id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm,
 	max_concurrent_requests, daily_request_limit, daily_input_tokens, daily_output_tokens,
 	daily_estimated_cost_usd, max_output_tokens, max_request_body, allow_direct_models, allowed_direct_models,
-	expires_at, portable, created_at, rotated_at, disabled_at`
+	expires_at, portable, optimization_mode, created_at, rotated_at, disabled_at`
 
 func (s *Store) InsertClientKey(ctx context.Context, k ClientKey) error {
 	aliases, _ := json.Marshal(k.AllowedAliases)
@@ -167,15 +209,16 @@ func (s *Store) InsertClientKey(ctx context.Context, k ClientKey) error {
 			id, name, key_prefix, key_hash, salt, enabled, allowed_aliases, rate_limit_rpm,
 			max_concurrent_requests, daily_request_limit, daily_input_tokens, daily_output_tokens,
 			daily_estimated_cost_usd, max_output_tokens, max_request_body, allow_direct_models,
-			allowed_direct_models, expires_at, portable, created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			allowed_direct_models, expires_at, portable, optimization_mode, created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		k.ID, k.Name, k.KeyPrefix, k.KeyHash, k.Salt, boolToInt(k.Enabled),
 		string(aliases), nullInt(k.RateLimitRPM), nullInt(k.MaxConcurrentRequests),
 		nullInt(k.DailyRequestLimit), nullInt64(k.DailyInputTokens), nullInt64(k.DailyOutputTokens),
 		nullFloat(k.DailyEstimatedCostUSD), nullInt(k.MaxOutputTokens), nullInt64(k.MaxRequestBody),
 		boolToInt(k.AllowDirectModels), string(directModels),
 		nullTime(k.ExpiresAt),
-		boolToInt(k.Portable), k.CreatedAt.UTC().Format(time.RFC3339Nano),
+		boolToInt(k.Portable), nullStrPtr(k.OptimizationMode),
+		k.CreatedAt.UTC().Format(time.RFC3339Nano),
 	)
 	return err
 }
@@ -199,13 +242,14 @@ func (s *Store) UpdateClientKeyPolicy(ctx context.Context, k ClientKey) error {
 			allow_direct_models=?,
 			allowed_direct_models=?,
 			expires_at=?,
-			portable=?
+			portable=?,
+			optimization_mode=?
 		WHERE id=?`,
 		k.Name, string(aliases), nullInt(k.RateLimitRPM), nullInt(k.MaxConcurrentRequests),
 		nullInt(k.DailyRequestLimit), nullInt64(k.DailyInputTokens), nullInt64(k.DailyOutputTokens),
 		nullFloat(k.DailyEstimatedCostUSD), nullInt(k.MaxOutputTokens), nullInt64(k.MaxRequestBody),
 		boolToInt(k.AllowDirectModels), string(directModels), nullTime(k.ExpiresAt),
-		boolToInt(k.Portable), k.ID,
+		boolToInt(k.Portable), nullStrPtr(k.OptimizationMode), k.ID,
 	)
 	if err != nil {
 		return err
@@ -333,7 +377,7 @@ type scannable interface {
 func scanClientKey(row scannable) (ClientKey, error) {
 	var k ClientKey
 	var enabled, portable, allowDirect int
-	var aliases, directModels sql.NullString
+	var aliases, directModels, optMode sql.NullString
 	var rpm, maxConc, dailyReq, maxOut, maxBody sql.NullInt64
 	var dailyIn, dailyOut sql.NullInt64
 	var dailyCost sql.NullFloat64
@@ -342,7 +386,7 @@ func scanClientKey(row scannable) (ClientKey, error) {
 	err := row.Scan(
 		&k.ID, &k.Name, &k.KeyPrefix, &k.KeyHash, &k.Salt, &enabled, &aliases, &rpm,
 		&maxConc, &dailyReq, &dailyIn, &dailyOut, &dailyCost, &maxOut, &maxBody,
-		&allowDirect, &directModels, &expires, &portable,
+		&allowDirect, &directModels, &expires, &portable, &optMode,
 		&created, &rotated, &disabled,
 	)
 	if err != nil {
@@ -351,6 +395,10 @@ func scanClientKey(row scannable) (ClientKey, error) {
 	k.Enabled = enabled == 1
 	k.Portable = portable == 1
 	k.AllowDirectModels = allowDirect == 1
+	if optMode.Valid && optMode.String != "" {
+		v := optMode.String
+		k.OptimizationMode = &v
+	}
 	if aliases.Valid && aliases.String != "" && aliases.String != "null" {
 		_ = json.Unmarshal([]byte(aliases.String), &k.AllowedAliases)
 	}
@@ -631,6 +679,7 @@ type RequestRecord struct {
 	RequestedModel     string
 	ResolvedAlias      string
 	ProviderID         string
+	AccountID          string // provider account attribution; empty = default
 	UpstreamModel      string
 	Attempt            int
 	FallbackReason     string
@@ -646,13 +695,17 @@ type RequestRecord struct {
 }
 
 func (s *Store) InsertRequest(ctx context.Context, r RequestRecord) error {
+	accountID := r.AccountID
+	if accountID == "" {
+		accountID = "default"
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO request_log(id, timestamp, client_key_id, inbound_protocol, requested_model, resolved_alias,
-			provider_id, upstream_model, attempt, fallback_reason, status_code, latency_ms, time_to_first_token_ms,
+			provider_id, account_id, upstream_model, attempt, fallback_reason, status_code, latency_ms, time_to_first_token_ms,
 			input_tokens, output_tokens, usage_source, error_class, stream, client_label)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.Timestamp.UTC().Format(time.RFC3339Nano), nullStr(r.ClientKeyID), r.InboundProtocol,
-		r.RequestedModel, nullStr(r.ResolvedAlias), nullStr(r.ProviderID), nullStr(r.UpstreamModel),
+		r.RequestedModel, nullStr(r.ResolvedAlias), nullStr(r.ProviderID), nullStr(accountID), nullStr(r.UpstreamModel),
 		r.Attempt, nullStr(r.FallbackReason), r.StatusCode, r.LatencyMs, r.TimeToFirstTokenMs,
 		r.InputTokens, r.OutputTokens, nullStr(r.UsageSource), nullStr(r.ErrorClass), boolToInt(r.Stream),
 		nullStr(r.ClientLabel),
@@ -715,7 +768,7 @@ func (s *Store) UsageSince(ctx context.Context, since time.Time) (*UsageSummary,
 
 func (s *Store) RecentRequests(ctx context.Context, limit int, errorsOnly bool) ([]RequestRecord, error) {
 	q := `SELECT id, timestamp, client_key_id, inbound_protocol, requested_model, resolved_alias,
-		provider_id, upstream_model, attempt, fallback_reason, status_code, latency_ms, time_to_first_token_ms,
+		provider_id, account_id, upstream_model, attempt, fallback_reason, status_code, latency_ms, time_to_first_token_ms,
 		input_tokens, output_tokens, usage_source, error_class, stream, client_label
 		FROM request_log`
 	if errorsOnly {
@@ -731,10 +784,10 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, errorsOnly bool) 
 	for rows.Next() {
 		var r RequestRecord
 		var ts string
-		var clientKey, alias, provider, model, fb, usage, errClass, clientLabel sql.NullString
+		var clientKey, alias, provider, account, model, fb, usage, errClass, clientLabel sql.NullString
 		var stream int
 		if err := rows.Scan(&r.ID, &ts, &clientKey, &r.InboundProtocol, &r.RequestedModel, &alias,
-			&provider, &model, &r.Attempt, &fb, &r.StatusCode, &r.LatencyMs, &r.TimeToFirstTokenMs,
+			&provider, &account, &model, &r.Attempt, &fb, &r.StatusCode, &r.LatencyMs, &r.TimeToFirstTokenMs,
 			&r.InputTokens, &r.OutputTokens, &usage, &errClass, &stream, &clientLabel); err != nil {
 			return nil, err
 		}
@@ -742,6 +795,10 @@ func (s *Store) RecentRequests(ctx context.Context, limit int, errorsOnly bool) 
 		r.ClientKeyID = clientKey.String
 		r.ResolvedAlias = alias.String
 		r.ProviderID = provider.String
+		r.AccountID = account.String
+		if r.AccountID == "" {
+			r.AccountID = "default"
+		}
 		r.UpstreamModel = model.String
 		r.FallbackReason = fb.String
 		r.UsageSource = usage.String
@@ -762,6 +819,160 @@ func (s *Store) PurgeOldRequests(ctx context.Context, olderThan time.Time) (int6
 	return res.RowsAffected()
 }
 
+// --- Optimization records ---
+
+// InsertOptimizationRecord persists a privacy-conscious optimization decision
+// record. It satisfies the optimization.Store interface.
+func (s *Store) InsertOptimizationRecord(ctx context.Context, r optimization.Record) error {
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `
+			INSERT OR REPLACE INTO request_optimizations(
+				request_id, route_name, client_key_id, provider_id, model_id,
+				mode_requested, mode_applied, lui_version, renderer,
+				estimators_json, optimizers_json,
+				input_tokens_before, input_tokens_after_estimated,
+				provider_input_tokens_actual, provider_output_tokens_actual,
+				cache_status, cache_opportunity_tokens_est,
+				cache_read_tokens_actual, cache_write_tokens_actual, cache_source,
+				compression_input_tokens, compression_output_tokens,
+				gross_saving_usd, optimizer_cost_usd, net_saving_usd,
+				added_latency_ms, loss_class, bypassed, bypass_reason, quality_status,
+				created_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		r.RequestID, nullStr(r.RouteName), nullStr(r.ClientKeyID), nullStr(r.ProviderID), nullStr(r.ModelID),
+		nullStr(r.ModeRequested), nullStr(r.ModeApplied), nullStr(r.LUIVersion), nullStr(r.Renderer),
+		nullStr(r.EstimatorsJSON), nullStr(r.OptimizersJSON),
+		r.InputTokensBefore, r.InputTokensAfterEstimated,
+		r.ProviderInputTokensActual, r.ProviderOutputTokensActual,
+		nullStr(r.CacheStatus), r.CacheOpportunityTokensEst,
+		r.CacheReadTokensActual, r.CacheWriteTokensActual, nullStr(r.CacheSource),
+		r.CompressionInputTokens, r.CompressionOutputTokens,
+		r.GrossSavingUSD, r.OptimizerCostUSD, r.NetSavingUSD,
+		r.AddedLatencyMs, nullStr(r.LossClass), boolToInt(r.Bypassed), nullStr(r.BypassReason), nullStr(r.QualityStatus),
+		r.CreatedAt.UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+// GetOptimizationRecord returns the optimization record for a request, or nil.
+func (s *Store) GetOptimizationRecord(ctx context.Context, requestID string) (*optimization.Record, error) {
+	row := s.db.QueryRowContext(ctx, `
+			SELECT request_id, route_name, client_key_id, provider_id, model_id,
+				mode_requested, mode_applied, lui_version, renderer,
+				estimators_json, optimizers_json,
+				input_tokens_before, input_tokens_after_estimated,
+				provider_input_tokens_actual, provider_output_tokens_actual,
+				cache_status, cache_opportunity_tokens_est,
+				cache_read_tokens_actual, cache_write_tokens_actual, cache_source,
+				compression_input_tokens, compression_output_tokens,
+				gross_saving_usd, optimizer_cost_usd, net_saving_usd,
+				added_latency_ms, loss_class, bypassed, bypass_reason, quality_status, created_at
+			FROM request_optimizations WHERE request_id = ?`, requestID)
+	var r optimization.Record
+	var route, keyID, prov, model, modeReq, modeApp, lui, renderer, est, opt, loss, bypass, qual sql.NullString
+	var cacheStat, cacheSrc sql.NullString
+	var created string
+	err := row.Scan(&r.RequestID, &route, &keyID, &prov, &model,
+		&modeReq, &modeApp, &lui, &renderer, &est, &opt,
+		&r.InputTokensBefore, &r.InputTokensAfterEstimated,
+		&r.ProviderInputTokensActual, &r.ProviderOutputTokensActual,
+		&cacheStat, &r.CacheOpportunityTokensEst,
+		&r.CacheReadTokensActual, &r.CacheWriteTokensActual, &cacheSrc,
+		&r.CompressionInputTokens, &r.CompressionOutputTokens,
+		&r.GrossSavingUSD, &r.OptimizerCostUSD, &r.NetSavingUSD,
+		&r.AddedLatencyMs, &loss, &bypass, &qual, &created)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	r.RouteName, r.ClientKeyID, r.ProviderID, r.ModelID = route.String, keyID.String, prov.String, model.String
+	r.ModeRequested, r.ModeApplied, r.LUIVersion, r.Renderer = modeReq.String, modeApp.String, lui.String, renderer.String
+	r.EstimatorsJSON, r.OptimizersJSON = est.String, opt.String
+	r.LossClass, r.BypassReason, r.QualityStatus = loss.String, bypass.String, qual.String
+	r.Bypassed = bypass.Valid && bypass.String == "1"
+	r.CacheStatus = cacheStat.String
+	r.CacheSource = cacheSrc.String
+	r.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	return &r, nil
+}
+
+// OptimizationSummary aggregates optimization records since a time window.
+type OptimizationSummary struct {
+	RequestsOptimized   int
+	TokensBefore        int64
+	TokensAfter         int64
+	CachedTokens        int64
+	GrossSavingUSD      float64
+	OptimizerCostUSD    float64
+	NetSavingUSD        float64
+	BypassCount         int
+	AddedLatencyMsTotal int64
+	ByMode              map[string]int
+	ByProvider          map[string]int
+}
+
+// OptimizationSummarySince aggregates optimization records since since.
+func (s *Store) OptimizationSummarySince(ctx context.Context, since time.Time) (*OptimizationSummary, error) {
+	rows, err := s.db.QueryContext(ctx, `
+			SELECT mode_applied, provider_id, bypassed,
+				input_tokens_before, input_tokens_after_estimated, cache_opportunity_tokens_est,
+				gross_saving_usd, optimizer_cost_usd, net_saving_usd, added_latency_ms
+			FROM request_optimizations WHERE created_at >= ?`, since.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	sum := &OptimizationSummary{ByMode: map[string]int{}, ByProvider: map[string]int{}}
+	for rows.Next() {
+		var mode, prov, bypass sql.NullString
+		var before, after, cached, added sql.NullInt64
+		var gross, optCost, net sql.NullFloat64
+		if err := rows.Scan(&mode, &prov, &bypass, &before, &after, &cached, &gross, &optCost, &net, &added); err != nil {
+			return nil, err
+		}
+		sum.RequestsOptimized++
+		sum.TokensBefore += nullInt64Val(before)
+		sum.TokensAfter += nullInt64Val(after)
+		sum.CachedTokens += nullInt64Val(cached)
+		sum.GrossSavingUSD += nullFloatVal(gross)
+		sum.OptimizerCostUSD += nullFloatVal(optCost)
+		sum.NetSavingUSD += nullFloatVal(net)
+		sum.AddedLatencyMsTotal += nullInt64Val(added)
+		if bypass.Valid && bypass.String == "1" {
+			sum.BypassCount++
+		}
+		m := mode.String
+		if m == "" {
+			m = "unknown"
+		}
+		sum.ByMode[m]++
+		p := prov.String
+		if p == "" {
+			p = "unknown"
+		}
+		sum.ByProvider[p]++
+	}
+	return sum, rows.Err()
+}
+
+func nullInt64Val(v sql.NullInt64) int64 {
+	if v.Valid {
+		return v.Int64
+	}
+	return 0
+}
+
+func nullFloatVal(v sql.NullFloat64) float64 {
+	if v.Valid {
+		return v.Float64
+	}
+	return 0
+}
+
 func boolToInt(b bool) int {
 	if b {
 		return 1
@@ -774,6 +985,13 @@ func nullStr(s string) any {
 		return nil
 	}
 	return s
+}
+
+func nullStrPtr(s *string) any {
+	if s == nil || *s == "" {
+		return nil
+	}
+	return *s
 }
 
 // AliasAllowed returns true if the key may use the alias (empty allowlist = all).

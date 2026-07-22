@@ -94,6 +94,90 @@ func TestExportSanitized(t *testing.T) {
 	}
 }
 
+func TestSanitizeProviderConfig_RedactsCredential(t *testing.T) {
+	// Credential scheme preserved, target redacted.
+	p := ProviderConfig{
+		Type:          "openai",
+		BaseURL:       "https://api.openai.com",
+		CredentialRef: "keyring://my-production-key",
+	}
+	sp := SanitizeProviderConfig(p)
+	if sp.CredentialRef != "keyring://[redacted]" {
+		t.Fatalf("credential ref = %q, want keyring://[redacted]", sp.CredentialRef)
+	}
+	if sp.Type != "openai" {
+		t.Fatalf("type = %q", sp.Type)
+	}
+}
+
+func TestSanitizeProviderConfig_RedactsArbitrarySecretNames(t *testing.T) {
+	// Canary: secret values that do NOT match common prefixes (sk-, tr_live_).
+	p := ProviderConfig{
+		Type:          "anthropic",
+		CredentialRef: "env://MY_OBSCURE_SECRET_THAT_HAS_NO_COMMON_PREFIX",
+	}
+	sp := SanitizeProviderConfig(p)
+	if sp.CredentialRef != "env://[redacted]" {
+		t.Fatalf("credential ref = %q, want env://[redacted]", sp.CredentialRef)
+	}
+}
+
+func TestSanitizeProviderConfig_RedactsAllHeaderValues(t *testing.T) {
+	p := ProviderConfig{
+		Type: "openai-compatible",
+		Headers: map[string]string{
+			"Authorization": "Bearer sk-secret-thing",
+			"X-Custom-Auth": "tr_live_abc123",
+			"X-Request-Id":  "abc-123",
+			"x-api-key":     "some-arbitrary-value",
+		},
+	}
+	sp := SanitizeProviderConfig(p)
+	for k, v := range sp.Headers {
+		if v != "[redacted]" {
+			t.Fatalf("header %q value = %q, want [redacted]", k, v)
+		}
+	}
+	if len(sp.Headers) != 4 {
+		t.Fatalf("expected 4 headers, got %d", len(sp.Headers))
+	}
+}
+
+func TestSanitizeProviderConfig_NonSensitiveFieldsPreserved(t *testing.T) {
+	enabled := true
+	p := ProviderConfig{
+		Type:    "openai",
+		BaseURL: "https://api.example.com",
+		Enabled: &enabled,
+	}
+	sp := SanitizeProviderConfig(p)
+	if sp.Type != "openai" {
+		t.Fatalf("type = %q", sp.Type)
+	}
+	if sp.BaseURL != "https://api.example.com" {
+		t.Fatalf("base_url = %q", sp.BaseURL)
+	}
+	if sp.Enabled == nil || !*sp.Enabled {
+		t.Fatal("enabled should be true")
+	}
+}
+
+func TestSanitizeProviderConfig_EmptyCredential(t *testing.T) {
+	p := ProviderConfig{Type: "openai"}
+	sp := SanitizeProviderConfig(p)
+	if sp.CredentialRef != "" {
+		t.Fatalf("credential ref should be empty, got %q", sp.CredentialRef)
+	}
+}
+
+func TestSanitizeProviderConfig_NilHeaders(t *testing.T) {
+	p := ProviderConfig{Type: "openai"}
+	sp := SanitizeProviderConfig(p)
+	if sp.Headers != nil {
+		t.Fatal("headers should be nil when none configured")
+	}
+}
+
 func TestParseMaxRequestSize(t *testing.T) {
 	n, err := ParseMaxRequestSize("20MiB")
 	if err != nil || n != 20<<20 {

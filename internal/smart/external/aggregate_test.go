@@ -7,12 +7,12 @@ import (
 
 func recFor(cap CapabilityKey, src SourceID, bench string, val float64, published ModelIdentity) EvidenceRecord {
 	return EvidenceRecord{
-		Source:        src,
-		Benchmark:     bench,
-		Value:         val,
-		Scale:         ScaleZeroToHundred,
-		Capability:    cap,
-		Published:     published,
+		Source:     src,
+		Benchmark:  bench,
+		Value:      val,
+		Scale:      ScaleZeroToHundred,
+		Capability: cap,
+		Published:  published,
 	}
 }
 
