@@ -25,6 +25,7 @@ import {
   XCircle,
   AlertTriangle
 } from 'lucide-react';
+import { StatCard } from './components/StatCard';
 
 // API helpers
 const API_BASE = '/admin/v1';
@@ -474,6 +475,12 @@ export default function App() {
                       onClick={() => setCurrentTab('keys')} 
                     />
                     <SidebarItem 
+                      icon={<Shield className="h-4 w-4" />} 
+                      label="Quota" 
+                      active={currentTab === 'quota'} 
+                      onClick={() => setCurrentTab('quota')} 
+                    />
+                    <SidebarItem 
                       icon={<Terminal className="h-4 w-4" />} 
                       label="Playground" 
                       active={currentTab === 'playground'} 
@@ -490,6 +497,12 @@ export default function App() {
                       label="Settings" 
                       active={currentTab === 'system'} 
                       onClick={() => setCurrentTab('system')} 
+                    />
+                    <SidebarItem 
+                      icon={<Activity className="h-4 w-4" />} 
+                      label="Analytics" 
+                      active={currentTab === 'analytics'} 
+                      onClick={() => setCurrentTab('analytics')} 
                     />
                   </div>
                 </div>
@@ -606,6 +619,18 @@ export default function App() {
                   fetchKeys={fetchKeys}
                   toastSuccess={toastSuccess}
                   config={config}
+                />
+              )}
+
+              {currentTab === 'quota' && (
+                <QuotaTab 
+                  apiCall={apiCall}
+                />
+              )}
+
+              {currentTab === 'analytics' && (
+                <AnalyticsTab 
+                  apiCall={apiCall}
                 />
               )}
 
@@ -1080,6 +1105,202 @@ function SetupWizard({ onClose, apiCall, toastSuccess }: { onClose: () => void, 
             </button>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Stats Card Component
+function StatCard({ title, value, icon }: { title: string, value: string | number, icon: React.ReactNode }) {
+  return (
+    <div className="glass-panel rounded-2xl border border-zinc-800/80 p-6 flex items-start justify-between">
+      <div>
+        <div className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">{title}</div>
+        <div className="text-2xl font-bold mt-2 text-zinc-100">{value}</div>
+      </div>
+      <div className="p-2 rounded-xl bg-zinc-900 border border-zinc-800">{icon}</div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------
+// QUOTA VIEW
+// ----------------------------------------------------
+function QuotaTab({ apiCall }: any) {
+  const [summary, setSummary] = useState<any>(null);
+  const [windows, setWindows] = useState<any[]>([]);
+  const [events, setEvents] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [summaryData, windowsData, eventsData] = await Promise.all([
+        apiCall(`${API_BASE}/quota/summary`),
+        apiCall(`${API_BASE}/quota/windows`),
+        apiCall(`${API_BASE}/quota/events`),
+      ]);
+      setSummary(summaryData.summary);
+      setWindows(windowsData.windows || []);
+      setEvents(eventsData.events || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <RefreshCw className="h-8 w-8 animate-spin text-indigo-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <StatCard title="Total Quota" value={summary?.total_quota || 0} icon={<Database className="h-5 w-5 text-indigo-400" />} />
+        <StatCard title="Quota Remaining" value={summary?.quota_remaining || 0} icon={<Shield className="h-5 w-5 text-emerald-400" />} />
+        <StatCard title="Active Windows" value={windows.length} icon={<Clock className="h-5 w-5 text-amber-400" />} />
+      </div>
+
+      <div className="glass-panel rounded-2xl border border-zinc-800/80 p-6 space-y-4">
+        <h3 className="font-bold text-sm tracking-wide uppercase text-zinc-300">Active Quota Windows</h3>
+        <div className="divide-y divide-zinc-800/50">
+          {windows.map((w: any) => (
+            <div key={w.id} className="py-3.5">
+              <div className="font-semibold text-zinc-100">{w.id}</div>
+              <div className="text-xs text-zinc-400 mt-1">
+                {w.policy} | Resets: {new Date(w.reset_at).toLocaleString()}
+              </div>
+              <div className="flex items-center gap-4 mt-2">
+                <span className="text-xs">Usage: {w.current_value} / {w.max_value}</span>
+                <div className="w-full bg-zinc-700 rounded-full h-2">
+                  <div className="bg-indigo-500 h-2 rounded-full" style={{ width: `${(w.current_value / w.max_value) * 100}%` }}></div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="glass-panel rounded-2xl border border-zinc-800/80 p-6 space-y-4">
+        <h3 className="font-bold text-sm tracking-wide uppercase text-zinc-300">Recent Quota Events</h3>
+        <div className="divide-y divide-zinc-800/50">
+          {events.map((e: any) => (
+            <div key={e.id} className="py-3.5">
+              <div className="font-semibold text-zinc-100">{e.type}</div>
+              <div className="text-xs text-zinc-400 mt-1">
+                {new Date(e.timestamp).toLocaleString()}
+              </div>
+              <div className="text-sm text-zinc-300 mt-2">{e.detail}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------------------------------------------------
+// ANALYTICS VIEW
+// ----------------------------------------------------
+function AnalyticsTab({ apiCall }: any) {
+  const [usage, setUsage] = useState<any>(null);
+  const [cost, setCost] = useState<any>(null);
+  const [models, setModels] = useState<any[]>([]);
+  const [providers, setProviders] = useState<any[]>([]);
+  const [trends, setTrends] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [usageData, costData, modelsData, providersData, trendsData] = await Promise.all([
+        apiCall(`${API_BASE}/analytics/usage`),
+        apiCall(`${API_BASE}/analytics/cost`),
+        apiCall(`${API_BASE}/analytics/models`),
+        apiCall(`${API_BASE}/analytics/providers`),
+        apiCall(`${API_BASE}/analytics/trends`),
+      ]);
+      setUsage(usageData);
+      setCost(costData);
+      setModels(modelsData.models || []);
+      setProviders(providersData.providers || []);
+      setTrends(trendsData.trends || []);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <RefreshCw className="h-8 w-8 animate-spin text-indigo-400" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <StatCard title="Total Requests" value={usage?.total_requests || 0} icon={<Activity className="h-5 w-5 text-indigo-400" />} />
+        <StatCard title="Total Cost" value={`$${cost?.total_cost.toFixed(4) || '0.00'}`} icon={<Shield className="h-5 w-5 text-emerald-400" />} />
+        <StatCard title="Total Tokens" value={usage?.total_tokens || 0} icon={<Database className="h-5 w-5 text-amber-400" />} />
+      </div>
+
+      <div className="glass-panel rounded-2xl border border-zinc-800/80 p-6 space-y-4">
+        <h3 className="font-bold text-sm tracking-wide uppercase text-zinc-300">Usage by Model</h3>
+        <div className="divide-y divide-zinc-800/50">
+          {models.map((m: any) => (
+            <div key={m.model} className="py-3.5">
+              <div className="font-semibold text-zinc-100">{m.model}</div>
+              <div className="text-xs text-zinc-400 mt-1">
+                Requests: {m.request_count} | Cost: ${m.total_cost.toFixed(4)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="glass-panel rounded-2xl border border-zinc-800/80 p-6 space-y-4">
+        <h3 className="font-bold text-sm tracking-wide uppercase text-zinc-300">Usage by Provider</h3>
+        <div className="divide-y divide-zinc-800/50">
+          {providers.map((p: any) => (
+            <div key={p.provider} className="py-3.5">
+              <div className="font-semibold text-zinc-100">{p.provider}</div>
+              <div className="text-xs text-zinc-400 mt-1">
+                Requests: {p.request_count} | Cost: ${p.total_cost.toFixed(4)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="glass-panel rounded-2xl border border-zinc-800/80 p-6 space-y-4">
+        <h3 className="font-bold text-sm tracking-wide uppercase text-zinc-300">Usage Trends</h3>
+        <div className="divide-y divide-zinc-800/50">
+          {trends.map((t: any) => (
+            <div key={t.date} className="py-3.5">
+              <div className="font-semibold text-zinc-100">{new Date(t.date).toLocaleDateString()}</div>
+              <div className="text-xs text-zinc-400 mt-1">
+                Requests: {t.request_count} | Cost: ${t.total_cost.toFixed(4)}
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );
